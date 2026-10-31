@@ -24,7 +24,7 @@ BEGIN
             VALUE "FileDescription",  "Nirqoba Compiler Suite Installer\0"
             VALUE "FileVersion",      "1.0.0.0\0"
             VALUE "InternalName",     "NirqobaSetup\0"
-            VALUE "LegalCopyright",   "Copyright (c) 2024 Muhammad Tahmid Ahnaf\0"
+            VALUE "LegalCopyright",   "Copyright (2026-) Muhammad Tahmid Ahnaf\0"
             VALUE "OriginalFilename", "NirqobaSetup.exe\0"
             VALUE "ProductName",      "Nirqoba Compiler Suite\0"
             VALUE "ProductVersion",   "1.0.0.0\0"

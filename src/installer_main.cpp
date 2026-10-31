@@ -812,7 +812,7 @@ static void DrawPageOptions(ID2D1RenderTarget* rt) {
     // Path edit box visualization (behind the actual HWND edit control)
     float editT = sectionT + 42.f;
     float editB = editT + 52.f;
-    float editR = cR - 150.f;
+    float editR = cR - 154.f;
     rt->FillRoundedRectangle(RoundedRect(cL, editT, editR, editB, 5.f), g_brushSurface);
     rt->DrawRoundedRectangle(RoundedRect(cL, editT, editR, editB, 5.f), g_brushAccentBorder, 1.f);
 
@@ -837,8 +837,8 @@ static void DrawPageInstalling(ID2D1RenderTarget* rt) {
     float cMidX = (cL + cR) / 2.f;
 
     // Animated logo during install
-    float logoScale = 0.38f + 0.02f * sinf(g_animT * 1.2f);
-    DrawNirqobaLogo(rt, cMidX, cT + 75.f, logoScale);
+    float logoScale = 0.55f + 0.025f * sinf(g_animT * 1.2f);
+    DrawNirqobaLogo(rt, cMidX, cT + 128.f, logoScale);
 
     IDWriteTextFormat* titleFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
@@ -846,8 +846,8 @@ static void DrawPageInstalling(ID2D1RenderTarget* rt) {
         DWRITE_FONT_STRETCH_NORMAL, 34.f, L"en-us", &titleFmt);
     if (titleFmt) {
         titleFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-        rt->DrawTextW(L"Installing Nirqoba...", 21, titleFmt,
-            RectF(cL, cT + 165.f, cR, cT + 195.f), g_brushTextPri);
+        rt->DrawTextW(L"Installing Nirqoba", 18, titleFmt,
+            RectF(cL, cT + 300.f, cR, cT + 348.f), g_brushTextPri);
         titleFmt->Release();
     }
 
@@ -873,15 +873,15 @@ static void DrawPageInstalling(ID2D1RenderTarget* rt) {
     if (statusFmt) {
         statusFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         rt->DrawTextW(statusText, (UINT32)wcslen(statusText), statusFmt,
-            RectF(cL, cT + 200.f, cR, cT + 220.f), g_brushTextSec);
+            RectF(cL, cT + 354.f, cR, cT + 384.f), g_brushTextSec);
         statusFmt->Release();
     }
 
     // Progress bar track
     float barL = cL;
     float barR = cR;
-    float barT = cT + 240.f;
-    float barH = 8.f;
+    float barT = cT + 408.f;
+    float barH = 14.f;
     float barB = barT + barH;
     float barRadius = barH / 2.f;
 
@@ -917,7 +917,7 @@ static void DrawPageInstalling(ID2D1RenderTarget* rt) {
     if (pctFmt) {
         pctFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         rt->DrawTextW(pctText, (UINT32)wcslen(pctText), pctFmt,
-            RectF(cL, barB + 8.f, cR, barB + 22.f), g_brushTextSec);
+            RectF(cL, barB + 12.f, cR, barB + 38.f), g_brushTextSec);
         pctFmt->Release();
     }
 }
@@ -967,7 +967,7 @@ static void DrawPageFinish(ID2D1RenderTarget* rt) {
     if (titleFmt) {
         titleFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         rt->DrawTextW(L"Installation Complete!", 21, titleFmt,
-            RectF(cL, checkCy + checkR + 16.f, cR, checkCy + checkR + 50.f),
+            RectF(cL, checkCy + checkR + 12.f, cR, checkCy + checkR + 64.f),
             g_brushTextPri);
         titleFmt->Release();
     }
@@ -980,20 +980,19 @@ static void DrawPageFinish(ID2D1RenderTarget* rt) {
         subFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         subFmt->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
         rt->DrawTextW(
-            L"Nirqoba has been successfully installed on your computer.\n"
-            L"You can now start writing programs with the Nirqoba compiler.",
-            126, subFmt,
-            RectF(cL + 20.f, checkCy + checkR + 54.f, cR - 20.f, checkCy + checkR + 90.f),
+            L"Nirqoba is ready to use.",
+            23, subFmt,
+            RectF(cL + 20.f, checkCy + checkR + 68.f, cR - 20.f, checkCy + checkR + 104.f),
             g_brushTextSec);
         subFmt->Release();
     }
 
     // Info card
-    float infoT = checkCy + checkR + 100.f;
-    rt->FillRoundedRectangle(RoundedRect(cL, infoT, cR, infoT + 78.f, 6.f), g_brushSurface);
+    float infoT = checkCy + checkR + 116.f;
+    rt->FillRoundedRectangle(RoundedRect(cL, infoT, cR, infoT + 102.f, 10.f), g_brushSurface);
     ID2D1SolidColorBrush* infoAccent = nullptr;
     rt->CreateSolidColorBrush(Color::Success, &infoAccent);
-    rt->FillRoundedRectangle(RoundedRect(cL, infoT, cL + 4.f, infoT + 78.f, 2.f), infoAccent);
+    rt->FillRoundedRectangle(RoundedRect(cL, infoT, cL + 5.f, infoT + 102.f, 3.f), infoAccent);
     infoAccent->Release();
 
     IDWriteTextFormat* infoFmt = nullptr;
@@ -1002,7 +1001,7 @@ static void DrawPageFinish(ID2D1RenderTarget* rt) {
         DWRITE_FONT_STRETCH_NORMAL, 18.f, L"en-us", &infoFmt);
     if (infoFmt) {
         rt->DrawTextW(L"Installed to:", 13, infoFmt,
-            RectF(cL + 16.f, infoT + 10.f, cR - 10.f, infoT + 26.f), g_brushTextMuted);
+            RectF(cL + 24.f, infoT + 12.f, cR - 16.f, infoT + 38.f), g_brushTextMuted);
 
         IDWriteTextFormat* pathFmt = nullptr;
         g_dwFactory->CreateTextFormat(L"Cascadia Mono", nullptr,
@@ -1015,13 +1014,13 @@ static void DrawPageFinish(ID2D1RenderTarget* rt) {
         }
         if (pathFmt) {
             rt->DrawTextW(g_installPath.c_str(), (UINT32)g_installPath.size(), pathFmt,
-                RectF(cL + 16.f, infoT + 28.f, cR - 10.f, infoT + 46.f), g_brushAccent);
+                RectF(cL + 24.f, infoT + 40.f, cR - 16.f, infoT + 66.f), g_brushAccent);
             pathFmt->Release();
         }
 
         rt->DrawTextW(L"Run  nirqoba --help  to get started.",
             36, infoFmt,
-            RectF(cL + 16.f, infoT + 50.f, cR - 10.f, infoT + 66.f), g_brushTextSec);
+            RectF(cL + 24.f, infoT + 70.f, cR - 16.f, infoT + 96.f), g_brushTextSec);
         infoFmt->Release();
     }
 }
@@ -1108,7 +1107,7 @@ static void UpdateNativeControls() {
         else if (g_currentPage == PAGE_OPTIONS)
             SetWindowTextW(g_hBtnNext, L"Install");
         else
-            SetWindowTextW(g_hBtnNext, L"Next ›");
+            SetWindowTextW(g_hBtnNext, L"Next");
         EnableWindow(g_hBtnNext, g_currentPage != PAGE_INSTALLING);
     }
 
@@ -1148,7 +1147,7 @@ static void GoNextPage() {
     } else if (g_currentPage < PAGE_OPTIONS) {
         g_currentPage = (InstallerPage)((int)g_currentPage + 1);
     }
-    if (g_currentPage != PAGE_INSTALLING && g_currentPage != PAGE_FINISH)
+    if (g_currentPage != PAGE_FINISH)
         StartPageTransition();
     UpdateNativeControls();
     InvalidateRect(g_hWnd, nullptr, FALSE);
@@ -1176,8 +1175,8 @@ static void CreateNativeControls(HWND hWnd) {
     float cT  = TITLEBAR_H + 32.f;
 
     // Options page: path edit box
-    float editT = cT + 74.f + 22.f;
-    float editR = cR - 90.f;
+    float editT = cT + 120.f + 42.f;
+    float editR = cR - 154.f;
 
     g_hEditPath = CreateWindowExW(
         0, L"EDIT", g_installPath.c_str(),
@@ -1244,14 +1243,14 @@ static void CreateNativeControls(HWND hWnd) {
 
     // Back button
     g_hBtnBack = CreateWindowExW(
-        0, L"BUTTON", L"‹ Back",
+        0, L"BUTTON", L"Back",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         (int)btnMarR - 2 * (int)btnW - 16, (int)btnBarT + 15, (int)btnW, (int)btnH,
         hWnd, (HMENU)ID_BTN_BACK, g_hInst, nullptr);
 
     // Next button (primary)
     g_hBtnNext = CreateWindowExW(
-        0, L"BUTTON", L"Next ›",
+        0, L"BUTTON", L"Next",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         (int)btnMarR - (int)btnW, (int)btnBarT + 15, (int)btnW, (int)btnH,
         hWnd, (HMENU)ID_BTN_NEXT, g_hInst, nullptr);
@@ -1271,7 +1270,7 @@ static HBRUSH g_hSurfBrush   = nullptr;
 static HBRUSH g_hEditBrush   = nullptr;
 
 static void DrawStyledButton(const DRAWITEMSTRUCT* item) {
-    if (!item || !item->hWnd) return;
+    if (!item || !item->hwndItem) return;
     const bool primary = item->CtlID == ID_BTN_NEXT;
     const bool disabled = (item->itemState & ODS_DISABLED) != 0;
     const bool pressed = (item->itemState & ODS_SELECTED) != 0;
@@ -1296,6 +1295,8 @@ static void DrawStyledButton(const DRAWITEMSTRUCT* item) {
     wchar_t label[80] = {};
     GetWindowTextW(item->hwndItem, label, ARRAYSIZE(label));
     RECT textRect = item->rcItem;
+    HFONT font = (HFONT)SendMessageW(item->hwndItem, WM_GETFONT, 0, 0);
+    HGDIOBJ oldFont = font ? SelectObject(item->hDC, font) : nullptr;
     SetBkMode(item->hDC, TRANSPARENT);
     SetTextColor(item->hDC, textColor);
     DrawTextW(item->hDC, label, -1, &textRect,
@@ -1304,6 +1305,7 @@ static void DrawStyledButton(const DRAWITEMSTRUCT* item) {
         InflateRect(&textRect, -8, -7);
         DrawFocusRect(item->hDC, &textRect);
     }
+    if (oldFont) SelectObject(item->hDC, oldFont);
 }
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
