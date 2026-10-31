@@ -1,77 +1,61 @@
 @echo off
-:: Build Nirqoba Windows Installer using Inno Setup
-:: Requires: Inno Setup 6.x installed and in PATH
-:: Usage: build_installer.bat [/src <directory>] [/out <output directory>]
+setlocal
 
-set "SRCDIR=%~dp0.."
-set "OUTDIR=%SRCDIR%\windows_installer\dist"
+set "INSTALLER_ROOT=%~dp0.."
+for %%I in ("%INSTALLER_ROOT%") do set "INSTALLER_ROOT=%%~fI"
+set "REPO_ROOT=%INSTALLER_ROOT%\.."
+for %%I in ("%REPO_ROOT%") do set "REPO_ROOT=%%~fI"
+set "SOURCE_DIR=%INSTALLER_ROOT%\dist\package"
+set "OUTPUT_DIR=%INSTALLER_ROOT%\dist"
+
+:parse_args
+if "%~1"=="" goto args_done
+if /I "%~1"=="/src" (
+  if "%~2"=="" goto usage
+  for %%I in ("%~2") do set "SOURCE_DIR=%%~fI"
+  shift
+  shift
+  goto parse_args
+)
+if /I "%~1"=="/out" (
+  if "%~2"=="" goto usage
+  for %%I in ("%~2") do set "OUTPUT_DIR=%%~fI"
+  shift
+  shift
+  goto parse_args
+)
+goto usage
+
+:args_done
+if not exist "%SOURCE_DIR%\bin\nirqoba.exe" (
+  echo Error: staged compiler was not found at "%SOURCE_DIR%\bin\nirqoba.exe".
+  echo Run build_msvc.bat first, or pass /src with a staged package directory.
+  exit /b 2
+)
+
 set "ISCC="
-
-:: Parse arguments
-for %%i in (%) do (
-    if /I "%%~i"=="/src" set "SRCDIR=%%~xi"
-    if /I "%%~i"=="/out" set "OUTDIR=%%~xi"
+for %%I in (ISCC.exe) do set "ISCC=%%~$PATH:I"
+if not defined ISCC if exist "%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe" set "ISCC=%ProgramFiles(x86)%\Inno Setup 6\ISCC.exe"
+if not defined ISCC if exist "%ProgramFiles%\Inno Setup 6\ISCC.exe" set "ISCC=%ProgramFiles%\Inno Setup 6\ISCC.exe"
+if not defined ISCC (
+  echo Error: Inno Setup 6 compiler ISCC.exe was not found.
+  echo Install Inno Setup 6 and add ISCC.exe to PATH.
+  exit /b 3
 )
 
-echo.
-echo ============================================
-echo Nirqoba Windows Installer Builder
-echo ============================================
-echo.
+if not exist "%OUTPUT_DIR%" mkdir "%OUTPUT_DIR%"
+if errorlevel 1 exit /b 1
 
-:: Check for Inno Setup
-where iscc >nul 2>&1
-if %errorlevel% neq 0 (
-    echo.
-    echo Error: Inno Setup compiler (iscc) not found in PATH.
-    echo Please install Inno Setup 6.x from: https://jrsoftware.org/isdownload.php
-    echo.
-    pause
-    exit /b 1
+"%ISCC%" "/DStageDir=%SOURCE_DIR%" "/O%OUTPUT_DIR%" "/Fnirqoba-setup" "%INSTALLER_ROOT%\installer_scripts\nirqoba_installer.iss"
+if errorlevel 1 exit /b %errorlevel%
+
+if not exist "%OUTPUT_DIR%\nirqoba-setup.exe" (
+  echo Error: ISCC completed without producing nirqoba-setup.exe.
+  exit /b 4
 )
+echo Installer created: "%OUTPUT_DIR%\nirqoba-setup.exe"
+exit /b 0
 
-echo Found Inno Setup compiler.
-iscc --version
-
-:: Change to installer scripts directory
-pushd "%SRCDIR%\windows_installer\installer_scripts"
-
-echo.
-echo Building installer from: installer_scripts\
-echo Output to: %OUTDIR\
-echo.
-
-:: Build the installer
-iscc nirqoba_installer.iss
-
-if %errorlevel% neq 0 (
-    echo.
-    echo Error: Inno Setup compilation failed with error code %errorlevel%
-    echo.
-    popd
-    exit /b %errorlevel%
-)
-
-echo.
-echo.
-echo Installer build successful!
-echo.
-
-:: Check if output files exist
-if exist "%OUTDIR\nirqoba_setup.exe" (
-    echo Installer executable: %OUTDIR\nirqoba_setup.exe
-    echo Size: %~zxnirqoba_setup.exe bytes
-) else (
-    echo Warning: Installer output not found in %OUTDIR\
-)
-
-:: List all output files
-dir "%OUTDIR\*.exe" /-b 2>nul
-dir "%OUTDIR\*.iss" /-b 2>nul
-
-popd
-echo.
-echo ============================================
-echo Build complete.
-echo ============================================
-pause
+:usage
+echo Usage: %~nx0 [/src staged-package-directory] [/out output-directory]
+exit /b 2

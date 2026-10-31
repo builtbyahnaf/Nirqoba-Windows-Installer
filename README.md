@@ -1,30 +1,32 @@
-# Windows Installer Foundation
+﻿# Windows Installer Foundation
 
-This directory contains the foundation for building and distributing the Nirqoba compiler as a Windows application.
+This directory contains a Windows packaging foundation for the Nirqoba compiler.
 
 ## Contents
 
-- `build_scripts/` - Batch and PowerShell scripts for building the Nirqoba compiler on Windows
-- `installer_scripts/` - Inno Setup or NSIS script templates for creating Windows installers
-- `dist/` - Distribution outputs (installers, portable ZIPs)
-- `licenses/` - License files and third-party attributions
+- `build_scripts/build_msvc.bat` builds the compiler and stages a package.
+- `build_scripts/stage_package.ps1` collects the compiler, runtime library, examples, and docs.
+- `build_scripts/build_installer.bat` builds an installer from the staged package.
+- `installer_scripts/nirqoba_installer.iss` defines the Inno Setup installer.
+- `dist/` contains generated package and installer output; do not commit these build artifacts.
 
-## Getting Started
+## Build
 
-1. Ensure the Nirqoba compiler is built (see the main project's `README.md`)
-2. Run the build scripts in `build_scripts/` to generate the compiler binaries
-3. Use the installer scripts in `installer_scripts/` to create the Windows installer
+1. Install the pinned Windows build dependencies and run `scripts/bootstrap.ps1` in the repository root.
+2. Install Inno Setup 6 and make `ISCC.exe` available on `PATH` to build an installer.
+3. Run `build_scripts\build_msvc.bat Release` from this directory to build and stage the package.
+4. Run `build_scripts\build_installer.bat` to create `dist\nirqoba-setup.exe`.
 
-## Phase 6.9 - Pre-Phase 7 Foundation
+To stage an existing build without rebuilding, run
+`powershell -NoProfile -ExecutionPolicy Bypass -File build_scripts\stage_package.ps1 -Configuration RelWithDebInfo`.
 
-This phase establishes the Windows deployment infrastructure that will support:
-- Phase 7: Full Windows application deployment and user experience
-- Phase 8: Auto-update mechanisms
-- Phase 9: Cross-platform binary distribution
+## Current limits
 
-### Completed in this phase:
-- [x] Git repository initialization
-- [x] Basic directory structure
-- [x] README documentation
-- [x] Build script templates
-- [x] Installer script templates
+This is a developer packaging foundation, not a relocatable end-user compiler distribution.
+`toolchain/toolchain.json` contains absolute paths to the build host's LLVM and MSVC installations.
+The package includes the runtime static library for linking, so compilation on another machine still
+requires a compatible toolchain installation and a generated configuration. A redistributable,
+relocatable toolchain bundle remains future work.
+
+The installer script and staging flow are implemented, but an actual installer build and install/
+uninstall check require Inno Setup 6 (`ISCC.exe`) and have not yet been validated here.
