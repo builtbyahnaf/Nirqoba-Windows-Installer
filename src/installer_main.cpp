@@ -76,7 +76,7 @@ namespace Color {
 
 // Window dimensions
 static const int WINDOW_W = 1550;
-static const int WINDOW_H = 750;
+static const int WINDOW_H = 850;
 static const int SIDEBAR_W = 300;
 static const int TITLEBAR_H = 52;
 static const int ID_TIMER_TRANSITION = 201;
@@ -148,6 +148,7 @@ static ID2D1LinearGradientBrush* g_brushButtonHover  = nullptr;
 
 // Logo bitmap
 static ID2D1Bitmap* g_logoBitmap = nullptr;
+static std::wstring g_licenseText;
 
 // Installer state
 static InstallerPage g_currentPage = PAGE_WELCOME;
@@ -159,6 +160,7 @@ static std::wstring  g_installPath;
 static bool          g_addDesktopShortcut = true;
 static bool          g_addToPath         = true;
 static HWND          g_hEditPath  = nullptr;
+static HWND          g_hLicenseText = nullptr;
 static HWND          g_hBtnNext   = nullptr;
 static HWND          g_hBtnBack   = nullptr;
 static HWND          g_hBtnCancel = nullptr;
@@ -228,8 +230,68 @@ static HRESULT LoadBitmapFromFile(const wchar_t* path, ID2D1Bitmap** ppBitmap) {
     return hr;
 }
 
-// ---------------------------------------------------------------------------
-// D2D resource creation / teardown
+static const wchar_t kEmbeddedLicense[] = LR"LICENSE(This project is dual-licensed under both the MIT License and the Apache License,
+Version 2.0 with LLVM Exceptions. You may select, at your option, the license
+under which you wish to use, copy, modify, distribute, or sub-license this software.
+
+--------------------------------------------------------------------------------
+OPTION 1: THE MIT LICENSE
+
+Copyright (c) 2026 [Your Name or Project Team]
+
+Permission is hereby granted, free of charge, to any person obtaining a copy
+of this software and associated documentation files (the "Software"), to deal
+in the Software without restriction, including without limitation the rights
+to use, copy, modify, merge, publish, distribute, sublicense, and/or sell
+copies of the Software, and to permit persons to whom the Software is
+furnished to do so, subject to the following conditions:
+
+The above copyright notice and this permission notice shall be included in all
+copies or substantial portions of the Software.
+
+THE SOFTWARE IS PROVIDED "AS IS", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR
+IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY,
+FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE
+AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER
+LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM,
+OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE
+SOFTWARE.
+
+--------------------------------------------------------------------------------
+OPTION 2: THE APACHE LICENSE, VERSION 2.0 (WITH LLVM EXCEPTIONS)
+
+Licensed under the Apache License, Version 2.0 (the "License");
+you may not use this file except in compliance with the License.
+You may obtain a copy of the License at
+
+    http://apache.org
+
+Unless required by applicable law or agreed to in writing, software
+distributed under the License is distributed on an "AS IS" BASIS,
+WITHOUT WARRANTIES OR CONDITIONS OF ANY KIND, either express or implied.
+See the License for the specific language governing permissions and
+limitations under the License.
+
+--- LLVM Exceptions to the Apache 2.0 License ---
+
+As an exception, if you use this Software to compile your own source code
+and portions of this Software are embedded into the binary output, such
+use does not by itself cause the resulting binary to be covered by the
+Apache License. Your use of that binary is not restricted by this License,
+except that you must retain this exception notice if you redistribute
+the binary output in a form that includes this Software's source code.
+)LICENSE";
+
+static void LoadEmbeddedLicenseText() {
+    g_licenseText.clear();
+    for (size_t i = 0; kEmbeddedLicense[i] != L'\0'; ++i) {
+        if (kEmbeddedLicense[i] == L'\r') continue;
+        if (kEmbeddedLicense[i] == L'\n')
+            g_licenseText += L"\r\n";
+        else
+            g_licenseText += kEmbeddedLicense[i];
+    }
+}
 // ---------------------------------------------------------------------------
 static void CreateBrushes() {
     auto* rt = g_renderTarget;
@@ -683,8 +745,9 @@ static void DrawPageWelcome(ID2D1RenderTarget* rt) {
         bodyFmt->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
         bodyFmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         const wchar_t* welcomeText =
-            L"Choose an install location, review the MIT open-source license, "
-            L"and follow the steps to install Nirqoba.";
+            L"Nirqoba is an ambitious general-purpose programming language exploring a unified approach to systems programming, "
+            L"machine learning, scientific computing, and general-purpose development with an emphasis on readability, performance, and developer experience."
+            L" Click on Next to continue.";
         rt->DrawTextW(welcomeText, (UINT32)wcslen(welcomeText), bodyFmt,
             RectF(cL + 36.f, cardT + 24.f, cR - 36.f, cardB - 24.f),
             g_brushTextSec);
@@ -711,7 +774,7 @@ static void DrawPageLicense(ID2D1RenderTarget* rt) {
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
         DWRITE_FONT_STRETCH_NORMAL, 18.f, L"en-us", &subFmt);
     if (subFmt) {
-        rt->DrawTextW(L"MIT License", 11, subFmt,
+        rt->DrawTextW(L"Open source licenses", 20, subFmt,
             RectF(cL, cT + 58.f, cR, cT + 86.f), g_brushTextSec);
         subFmt->Release();
     }
@@ -726,46 +789,6 @@ static void DrawPageLicense(ID2D1RenderTarget* rt) {
 
     // Accent border
     rt->DrawRoundedRectangle(RoundedRect(cL, boxT, cR, boxB, 6.f), g_brushAccentBorder, 1.f);
-
-    IDWriteTextFormat* licenseFmt = nullptr;
-    g_dwFactory->CreateTextFormat(L"Cascadia Mono", nullptr,
-        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 15.f, L"en-us", &licenseFmt);
-    if (!licenseFmt) {
-        // Fallback to Consolas
-        g_dwFactory->CreateTextFormat(L"Consolas", nullptr,
-            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL, 15.f, L"en-us", &licenseFmt);
-    }
-    if (licenseFmt) {
-        licenseFmt->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
-        const wchar_t* licenseText =
-            L"MIT License\n\n"
-            L"Copyright (2026-) Muhammad Tahmid Ahnaf\n\n"
-            L"Permission is hereby granted, free of charge, to any person obtaining a copy "
-            L"of this software and associated documentation files (the \"Software\"), to deal "
-            L"in the Software without restriction, including without limitation the rights "
-            L"to use, copy, modify, merge, publish, distribute, sublicense, and/or sell "
-            L"copies of the Software, and to permit persons to whom the Software is "
-            L"furnished to do so, subject to the following conditions:\n\n"
-            L"The above copyright notice and this permission notice shall be included in all "
-            L"copies or substantial portions of the Software.\n\n"
-            L"THE SOFTWARE IS PROVIDED \"AS IS\", WITHOUT WARRANTY OF ANY KIND, EXPRESS OR "
-            L"IMPLIED, INCLUDING BUT NOT LIMITED TO THE WARRANTIES OF MERCHANTABILITY, "
-            L"FITNESS FOR A PARTICULAR PURPOSE AND NONINFRINGEMENT. IN NO EVENT SHALL THE "
-            L"AUTHORS OR COPYRIGHT HOLDERS BE LIABLE FOR ANY CLAIM, DAMAGES OR OTHER "
-            L"LIABILITY, WHETHER IN AN ACTION OF CONTRACT, TORT OR OTHERWISE, ARISING FROM, "
-            L"OUT OF OR IN CONNECTION WITH THE SOFTWARE OR THE USE OR OTHER DEALINGS IN THE "
-            L"SOFTWARE.";
-
-        // Clip to box
-        D2D1_RECT_F clipRect = RectF(cL + 14.f, boxT + 12.f, cR - 14.f, boxB - 12.f);
-        rt->PushAxisAlignedClip(clipRect, D2D1_ANTIALIAS_MODE_ALIASED);
-        rt->DrawTextW(licenseText, (UINT32)wcslen(licenseText),
-            licenseFmt, clipRect, g_brushTextSec);
-        rt->PopAxisAlignedClip();
-        licenseFmt->Release();
-    }
 
 }
 
@@ -1091,11 +1114,13 @@ static void OnRender() {
 // ---------------------------------------------------------------------------
 static void UpdateNativeControls() {
     bool showEditPath  = (g_currentPage == PAGE_OPTIONS);
+    bool showLicense   = (g_currentPage == PAGE_LICENSE);
     bool showBrowse    = (g_currentPage == PAGE_OPTIONS);
     bool showChkDsk    = (g_currentPage == PAGE_OPTIONS);
     bool showChkPath   = (g_currentPage == PAGE_OPTIONS);
 
     if (g_hEditPath)   ShowWindow(g_hEditPath,   showEditPath ? SW_SHOW : SW_HIDE);
+    if (g_hLicenseText) ShowWindow(g_hLicenseText, showLicense ? SW_SHOW : SW_HIDE);
     if (g_hBtnBrowse)  ShowWindow(g_hBtnBrowse,  showBrowse   ? SW_SHOW : SW_HIDE);
     if (g_hChkDesktop) ShowWindow(g_hChkDesktop, showChkDsk   ? SW_SHOW : SW_HIDE);
     if (g_hChkPath)    ShowWindow(g_hChkPath,    showChkPath  ? SW_SHOW : SW_HIDE);
@@ -1173,6 +1198,23 @@ static void CreateNativeControls(HWND hWnd) {
     float cL  = SIDEBAR_W + 40.f;
     float cR  = (float)WINDOW_W - 40.f;
     float cT  = TITLEBAR_H + 32.f;
+
+    const float licenseTop = cT + 108.f + 12.f;
+    const float licenseBottom = WINDOW_H - 100.f - 12.f;
+    g_hLicenseText = CreateWindowExW(
+        0, L"EDIT", g_licenseText.c_str(),
+        WS_CHILD | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | ES_NOHIDESEL | WS_TABSTOP,
+        (int)cL + 14, (int)licenseTop, (int)(cR - cL - 28),
+        (int)(licenseBottom - licenseTop),
+        hWnd, nullptr, g_hInst, nullptr);
+    if (g_hLicenseText) {
+        HFONT licenseFont = CreateFontW(18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+        SendMessageW(g_hLicenseText, WM_SETFONT, (WPARAM)licenseFont, TRUE);
+        SendMessageW(g_hLicenseText, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
+            MAKELPARAM(12, 12));
+    }
 
     // Options page: path edit box
     float editT = cT + 120.f + 42.f;
@@ -1318,6 +1360,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         wchar_t pfDir[MAX_PATH];
         SHGetSpecialFolderPathW(hWnd, pfDir, CSIDL_PROGRAM_FILES, FALSE);
         g_installPath = std::wstring(pfDir) + L"\\Nirqoba";
+        LoadEmbeddedLicenseText();
 
         // DWM drop shadow for borderless window
         MARGINS margins = {1, 1, 1, 1};

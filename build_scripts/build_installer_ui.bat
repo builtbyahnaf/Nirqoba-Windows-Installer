@@ -36,7 +36,6 @@ if not exist "%ASSETS_DIR%\Nirqoba logo.png" (
     echo [ERROR] Required logo not found: "%ASSETS_DIR%\Nirqoba logo.png"
     exit /b 1
 )
-
 if not exist "%OUT_DIR%" mkdir "%OUT_DIR%"
 if errorlevel 1 exit /b 1
 if not exist "%OUT_DIR%\assets" mkdir "%OUT_DIR%\assets"
@@ -46,7 +45,6 @@ if errorlevel 1 (
     echo [ERROR] Could not stage installer logo.
     exit /b 1
 )
-
 echo [1/3] Compiling resources...
 "%RC_EXE%" /I "%SRC_DIR%" /I "%SDK_INC%\um" /I "%SDK_INC%\shared" /nologo /fo "%OUT_DIR%\installer.res" "%SRC_DIR%\installer.rc"
 if errorlevel 1 exit /b 1
