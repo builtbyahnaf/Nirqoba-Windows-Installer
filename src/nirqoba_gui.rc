@@ -1,0 +1,28 @@
+IDI_MAIN ICON "nirqoba.ico"
+IDI_SMALL ICON "nirqoba.ico"
+
+IDR_MENU1 MENU
+BEGIN
+    POPUP "&File"
+    BEGIN
+        MENUITEM "&Open...\tCtrl+O", 101
+        MENUITEM "C&ompile\tF5", 102
+        MENUITEM "Run\tF6", 103
+        SEPARATOR
+        MENUITEM "E&xit", 104
+    END
+    POPUP "&Help"
+    BEGIN
+        MENUITEM "&About...\tF1", 201
+    END
+END
+
+IDD_ABOUT DIALOG DISCARDABLE, 0, 0, 0
+STYLE DS_MODALFRAME | WS_CAPTION | WS_SYSMENU
+CAPTION "About nirqoba GUI"
+FONT 8, "MS Shell Dlg", 400, 0
+BEGIN
+    DEFPUSHBUTTON "OK", IDOK, 0, 0, 50, 14
+    ICON ICON_SMALL, 0, 0, 0, 0
+    LTEXT "nirqoba Compiler GUI\nVersion 0.1.0\n\nA graphical interface for the Nirqoba compiler.", 0, 20, 0, 0
+END
