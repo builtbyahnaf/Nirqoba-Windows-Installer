@@ -75,10 +75,11 @@ namespace Color {
 }
 
 // Window dimensions
-static const int WINDOW_W = 780;
-static const int WINDOW_H = 520;
-static const int SIDEBAR_W = 260;
-static const int TITLEBAR_H = 36;
+static const int WINDOW_W = 1550;
+static const int WINDOW_H = 750;
+static const int SIDEBAR_W = 300;
+static const int TITLEBAR_H = 52;
+static const int ID_TIMER_TRANSITION = 201;
 
 // IDs
 static const int ID_BTN_NEXT    = 101;
@@ -153,6 +154,7 @@ static InstallerPage g_currentPage = PAGE_WELCOME;
 static float         g_progress    = 0.0f;    // 0..1
 static float         g_animT       = 0.0f;    // animation ticker
 static bool          g_installing  = false;
+static float         g_transitionProgress = 1.f;
 static std::wstring  g_installPath;
 static bool          g_addDesktopShortcut = true;
 static bool          g_addToPath         = true;
@@ -376,12 +378,12 @@ static HRESULT CreateDeviceResources() {
         wchar_t logoPath[MAX_PATH];
         GetModuleFileNameW(g_hInst, logoPath, MAX_PATH);
         PathRemoveFileSpecW(logoPath);
-        PathAppendW(logoPath, L"assets\\logo_256.png");
+        PathAppendW(logoPath, L"assets\\Nirqoba logo.png");
         LoadBitmapFromFile(logoPath, &g_logoBitmap);
         if (!g_logoBitmap) {
             // Try relative path from exe location
             PathRemoveFileSpecW(logoPath);
-            PathAppendW(logoPath, L"..\\assets\\logo_256.png");
+            PathAppendW(logoPath, L"..\\assets\\Nirqoba logo.png");
             LoadBitmapFromFile(logoPath, &g_logoBitmap);
         }
     }
@@ -397,175 +399,21 @@ static void DiscardDeviceResources() {
 // Draw helpers
 // ---------------------------------------------------------------------------
 
-// Draw the Nirqoba logo shape directly using D2D geometry (no bitmap needed)
+// Draw the supplied Nirqoba mark at its original aspect ratio.
 static void DrawNirqobaLogo(ID2D1RenderTarget* rt, float cx, float cy, float scale) {
-    // Create geometry for the 4-petal diamond logo
-    ID2D1PathGeometry* tlGeo = nullptr;
-    ID2D1PathGeometry* trGeo = nullptr;
-    ID2D1PathGeometry* brGeo = nullptr;
-    ID2D1PathGeometry* blGeo = nullptr;
-    g_d2dFactory->CreatePathGeometry(&tlGeo);
-    g_d2dFactory->CreatePathGeometry(&trGeo);
-    g_d2dFactory->CreatePathGeometry(&brGeo);
-    g_d2dFactory->CreatePathGeometry(&blGeo);
-
-    // SVG viewBox: 473x694, logo center approx (243, 350)
-    // We'll scale so the logo fits in ~(scale * 2) diameter
-    float svgCx = 243.f, svgCy = 350.f;
-    auto pt = [&](float sx, float sy) -> D2D1_POINT_2F {
-        return D2D1::Point2F(cx + (sx - svgCx) * scale, cy + (sy - svgCy) * scale);
-    };
-
-    // TL petal - approximated with bezier curves
-    auto drawPetal = [&](ID2D1PathGeometry* geo, bool flip) {
-        ID2D1GeometrySink* sink = nullptr;
-        if (FAILED(geo->Open(&sink))) return;
-        sink->SetFillMode(D2D1_FILL_MODE_WINDING);
-
-        float fx = flip ? -1.f : 1.f; // mirror for right petals
-        // Left petal shape (mirrored for right)
-        D2D1_POINT_2F p0 = { cx + fx*(243.f - svgCx)*scale, cy + (58.f - svgCy)*scale };
-        sink->BeginFigure(p0, D2D1_FIGURE_BEGIN_FILLED);
-
-        // Cubic bezier approximation of the SVG path
-        sink->AddBezier(D2D1::BezierSegment(
-            { cx + fx*(220.f-svgCx)*scale, cy+(90.f-svgCy)*scale },
-            { cx + fx*(155.f-svgCx)*scale, cy+(165.f-svgCy)*scale },
-            { cx + fx*(123.f-svgCx)*scale, cy+(262.f-svgCy)*scale }));
-        sink->AddBezier(D2D1::BezierSegment(
-            { cx + fx*(122.f-svgCx)*scale, cy+(290.f-svgCy)*scale },
-            { cx + fx*(128.f-svgCx)*scale, cy+(325.f-svgCy)*scale },
-            { cx + fx*(135.f-svgCx)*scale, cy+(342.f-svgCy)*scale }));
-        sink->AddBezier(D2D1::BezierSegment(
-            { cx + fx*(155.f-svgCx)*scale, cy+(305.f-svgCy)*scale },
-            { cx + fx*(215.f-svgCx)*scale, cy+(240.f-svgCy)*scale },
-            { cx + fx*(262.f-svgCx)*scale, cy+(150.f-svgCy)*scale }));
-        sink->AddBezier(D2D1::BezierSegment(
-            { cx + fx*(263.f-svgCx)*scale, cy+(115.f-svgCy)*scale },
-            { cx + fx*(257.f-svgCx)*scale, cy+(82.f-svgCy)*scale },
-            { cx + fx*(243.f-svgCx)*scale, cy+(58.f-svgCy)*scale }));
-        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
-        sink->Close();
-        if (sink) sink->Release();
-    };
-
-    drawPetal(tlGeo, false);
-    drawPetal(trGeo, true);
-
-    // Bottom petals = rotate 180° around center
-    auto drawPetalBottom = [&](ID2D1PathGeometry* geo, bool flip) {
-        ID2D1GeometrySink* sink = nullptr;
-        if (FAILED(geo->Open(&sink))) return;
-        sink->SetFillMode(D2D1_FILL_MODE_WINDING);
-
-        float fx = flip ? -1.f : 1.f;
-        // Reflect: new_y = cy - (y - cy) = 2*cy - y
-        auto pt2 = [&](float sx, float sy) -> D2D1_POINT_2F {
-            return D2D1::Point2F(
-                cx + fx*(243.f - sx)*scale,   // x reflected from SVG center 243
-                cy - (sy - svgCy)*scale         // y reflected from SVG center 350
-            );
-        };
-
-        D2D1_POINT_2F p0 = { cx + fx*(243.f-243.f)*scale, cy - (58.f-svgCy)*scale };
-        sink->BeginFigure(p0, D2D1_FIGURE_BEGIN_FILLED);
-        sink->AddBezier(D2D1::BezierSegment(
-            pt2(220.f,90.f), pt2(155.f,165.f), pt2(123.f,262.f)));
-        sink->AddBezier(D2D1::BezierSegment(
-            pt2(122.f,290.f), pt2(128.f,325.f), pt2(135.f,342.f)));
-        sink->AddBezier(D2D1::BezierSegment(
-            pt2(155.f,305.f), pt2(215.f,240.f), pt2(262.f,150.f)));
-        sink->AddBezier(D2D1::BezierSegment(
-            pt2(263.f,115.f), pt2(257.f,82.f), pt2(243.f,58.f)));
-        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
-        sink->Close();
-        if (sink) sink->Release();
-    };
-
-    drawPetalBottom(brGeo, false);
-    drawPetalBottom(blGeo, true);
-
-    // Draw petals with gradient-matching solid colors (transparency layered)
-    ID2D1SolidColorBrush* b = nullptr;
-
-    // TL: indigo
-    rt->CreateSolidColorBrush(D2D1::ColorF(0x6A62B8, 0.92f), &b);
-    rt->FillGeometry(tlGeo, b); b->Release(); b = nullptr;
-
-    // TR: violet
-    rt->CreateSolidColorBrush(D2D1::ColorF(0xA085E4, 0.92f), &b);
-    rt->FillGeometry(trGeo, b); b->Release(); b = nullptr;
-
-    // BR: steel blue
-    rt->CreateSolidColorBrush(D2D1::ColorF(0x5A92D2, 0.88f), &b);
-    rt->FillGeometry(brGeo, b); b->Release(); b = nullptr;
-
-    // BL: lavender
-    rt->CreateSolidColorBrush(D2D1::ColorF(0xA98FEC, 0.88f), &b);
-    rt->FillGeometry(blGeo, b); b->Release(); b = nullptr;
-
-    // Center 4-pointed star
-    ID2D1PathGeometry* starGeo = nullptr;
-    g_d2dFactory->CreatePathGeometry(&starGeo);
-    {
-        ID2D1GeometrySink* sink = nullptr;
-        starGeo->Open(&sink);
-        sink->SetFillMode(D2D1_FILL_MODE_WINDING);
-
-        // Star at SVG (243, 352), outer radii: h=40, v=45, inner=12
-        float scx = cx;
-        float scy = cy + (352.f - svgCy) * scale;
-        float rh = 40.f * scale;
-        float rv = 45.f * scale;
-        float ri = 10.f * scale;
-
-        sink->BeginFigure(D2D1::Point2F(scx, scy - rv), D2D1_FIGURE_BEGIN_FILLED);
-        // Bezier star: top → right → bottom → left
-        sink->AddBezier(D2D1::BezierSegment(
-            D2D1::Point2F(scx + ri*0.3f, scy - ri*1.1f),
-            D2D1::Point2F(scx + ri*1.1f, scy - ri*0.3f),
-            D2D1::Point2F(scx + rh, scy)));
-        sink->AddBezier(D2D1::BezierSegment(
-            D2D1::Point2F(scx + ri*1.1f, scy + ri*0.3f),
-            D2D1::Point2F(scx + ri*0.3f, scy + ri*1.1f),
-            D2D1::Point2F(scx, scy + rv)));
-        sink->AddBezier(D2D1::BezierSegment(
-            D2D1::Point2F(scx - ri*0.3f, scy + ri*1.1f),
-            D2D1::Point2F(scx - ri*1.1f, scy + ri*0.3f),
-            D2D1::Point2F(scx - rh, scy)));
-        sink->AddBezier(D2D1::BezierSegment(
-            D2D1::Point2F(scx - ri*1.1f, scy - ri*0.3f),
-            D2D1::Point2F(scx - ri*0.3f, scy - ri*1.1f),
-            D2D1::Point2F(scx, scy - rv)));
-        sink->EndFigure(D2D1_FIGURE_END_CLOSED);
-        sink->Close();
-        if (sink) sink->Release();
-    }
-
-    // Glow effect: draw slightly larger star with dim white
-    ID2D1SolidColorBrush* glowBrush = nullptr;
-    rt->CreateSolidColorBrush(D2D1::ColorF(0xE9DEFA, 0.35f), &glowBrush);
-    D2D1_MATRIX_3X2_F oldTx;
-    rt->GetTransform(&oldTx);
-    float scx = cx;
-    float scy = cy + (352.f - svgCy) * scale;
-    rt->SetTransform(D2D1::Matrix3x2F::Scale(1.3f, 1.3f, D2D1::Point2F(scx, scy)));
-    rt->FillGeometry(starGeo, glowBrush);
-    rt->SetTransform(oldTx);
-    glowBrush->Release();
-
-    // Draw star white
-    rt->CreateSolidColorBrush(D2D1::ColorF(D2D1::ColorF::White, 1.0f), &b);
-    rt->FillGeometry(starGeo, b); b->Release(); b = nullptr;
-
-    // Cleanup
-    if (tlGeo) tlGeo->Release();
-    if (trGeo) trGeo->Release();
-    if (brGeo) brGeo->Release();
-    if (blGeo) blGeo->Release();
-    if (starGeo) starGeo->Release();
+    if (!g_logoBitmap) return;
+    // Fit the supplied portrait mark into a square without stretching or cropping it.
+    D2D1_SIZE_F source = g_logoBitmap->GetSize();
+    float box = 292.f * scale;
+    float factor = (source.width > 0.f && source.height > 0.f)
+        ? std::min(box / source.width, box / source.height) : 0.f;
+    float width = source.width * factor;
+    float height = source.height * factor;
+    rt->DrawBitmap(g_logoBitmap,
+        RectF(cx - width / 2.f, cy - height / 2.f,
+              cx + width / 2.f, cy + height / 2.f),
+        1.f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
 }
-
 // Draw the sidebar (always visible)
 static void DrawSidebar(ID2D1RenderTarget* rt) {
     // Sidebar background gradient
@@ -583,9 +431,9 @@ static void DrawSidebar(ID2D1RenderTarget* rt) {
     borderBrush->Release();
 
     // Logo (large, centered in top portion of sidebar)
-    float logoSize = 90.f;
+    float logoSize = 120.f;
     float logoCx = SIDEBAR_W / 2.f;
-    float logoCy = 115.f;
+    float logoCy = 140.f;
     DrawNirqobaLogo(rt, logoCx, logoCy, logoSize / 292.f);
 
     // "NIRQOBA" text below logo
@@ -595,7 +443,7 @@ static void DrawSidebar(ID2D1RenderTarget* rt) {
             L"Segoe UI", nullptr,
             DWRITE_FONT_WEIGHT_LIGHT, DWRITE_FONT_STYLE_NORMAL,
             DWRITE_FONT_STRETCH_NORMAL,
-            18.f, L"en-us", &fmt);
+            24.f, L"en-us", &fmt);
         if (fmt) {
             fmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
             fmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
@@ -609,26 +457,8 @@ static void DrawSidebar(ID2D1RenderTarget* rt) {
         }
     }
 
-    // Version label
-    {
-        IDWriteTextFormat* fmt = nullptr;
-        g_dwFactory->CreateTextFormat(
-            L"Segoe UI", nullptr,
-            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL,
-            9.5f, L"en-us", &fmt);
-        if (fmt) {
-            fmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-            rt->DrawTextW(L"v1.0.0 — Compiler Suite",
-                23, fmt,
-                RectF(0, logoCy + logoSize * 0.65f + 30.f, SIDEBAR_W, logoCy + logoSize * 0.65f + 46.f),
-                g_brushTextMuted);
-            fmt->Release();
-        }
-    }
-
     // Horizontal separator
-    float sepY = 228.f;
+    float sepY = 278.f;
     rt->DrawLine(
         D2D1::Point2F(24.f, sepY),
         D2D1::Point2F(SIDEBAR_W - 24.f, sepY),
@@ -638,8 +468,8 @@ static void DrawSidebar(ID2D1RenderTarget* rt) {
     const wchar_t* stepNames[] = {
         L"Welcome", L"License", L"Options", L"Installing", L"Finish"
     };
-    float stepStartY = 248.f;
-    float stepSpacing = 40.f;
+    float stepStartY = 310.f;
+    float stepSpacing = 56.f;
 
     for (int i = 0; i < PAGE_COUNT; i++) {
         float stepY = stepStartY + i * stepSpacing;
@@ -648,9 +478,9 @@ static void DrawSidebar(ID2D1RenderTarget* rt) {
         bool isFuture  = (i > (int)g_currentPage);
 
         // Step circle
-        float cx = 32.f;
+        float cx = 42.f;
         float cy2 = stepY + 8.f;
-        float r   = 8.f;
+        float r   = 11.f;
 
         ID2D1SolidColorBrush* circleFill   = nullptr;
         ID2D1SolidColorBrush* circleStroke = nullptr;
@@ -684,7 +514,7 @@ static void DrawSidebar(ID2D1RenderTarget* rt) {
             IDWriteTextFormat* numFmt = nullptr;
             g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
                 DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL, 8.f, L"en-us", &numFmt);
+                DWRITE_FONT_STRETCH_NORMAL, 11.f, L"en-us", &numFmt);
             if (numFmt) {
                 numFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
                 numFmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
@@ -700,12 +530,12 @@ static void DrawSidebar(ID2D1RenderTarget* rt) {
         g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
             isActive ? DWRITE_FONT_WEIGHT_SEMI_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
             DWRITE_FONT_STYLE_NORMAL, DWRITE_FONT_STRETCH_NORMAL,
-            10.5f, L"en-us", &lFmt);
+            16.f, L"en-us", &lFmt);
         if (lFmt) {
             lFmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
             auto lColor = isActive ? g_brushTextPri : (isDone ? g_brushSuccess : g_brushTextMuted);
             rt->DrawTextW(stepNames[i], (UINT32)wcslen(stepNames[i]), lFmt,
-                RectF(cx + r + 8.f, stepY, SIDEBAR_W - 12.f, stepY + 20.f),
+                RectF(cx + r + 12.f, stepY, SIDEBAR_W - 18.f, stepY + 28.f),
                 lColor);
             lFmt->Release();
         }
@@ -730,12 +560,12 @@ static void DrawSidebar(ID2D1RenderTarget* rt) {
         IDWriteTextFormat* fmt = nullptr;
         g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
             DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL, 8.5f, L"en-us", &fmt);
+            DWRITE_FONT_STRETCH_NORMAL, 12.f, L"en-us", &fmt);
         if (fmt) {
             fmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
-            rt->DrawTextW(L"© 2024 Muhammad Tahmid Ahnaf",
-                29, fmt,
-                RectF(0, WINDOW_H - 24.f, SIDEBAR_W, (float)WINDOW_H - 8.f),
+            rt->DrawTextW(L"Copyright (2026-) Muhammad Tahmid Ahnaf",
+                39, fmt,
+                RectF(0, WINDOW_H - 34.f, SIDEBAR_W, (float)WINDOW_H - 12.f),
                 g_brushTextMuted);
             fmt->Release();
         }
@@ -768,7 +598,7 @@ static void DrawTitleBar(ID2D1RenderTarget* rt) {
     IDWriteTextFormat* fmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 12.f, L"en-us", &fmt);
+        DWRITE_FONT_STRETCH_NORMAL, 17.f, L"en-us", &fmt);
     if (fmt) {
         fmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         rt->DrawTextW(pageTitle[(int)g_currentPage],
@@ -816,108 +646,51 @@ static void DrawTitleBar(ID2D1RenderTarget* rt) {
 // ---------------------------------------------------------------------------
 
 static void DrawPageWelcome(ID2D1RenderTarget* rt) {
-    float cL = SIDEBAR_W + 40.f;
-    float cR = (float)WINDOW_W - 40.f;
-    float cT = TITLEBAR_H + 40.f;
+    const float cL = SIDEBAR_W + 64.f;
+    const float cR = (float)WINDOW_W - 64.f;
+    const float cT = 118.f;
 
-    // Main headline
     IDWriteTextFormat* titleFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_LIGHT, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 30.f, L"en-us", &titleFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 44.f, L"en-us", &titleFmt);
     if (titleFmt) {
-        rt->DrawTextW(L"Welcome", 7, titleFmt,
-            RectF(cL, cT, cR, cT + 44.f), g_brushTextPri);
+        rt->DrawTextW(L"Welcome to Nirqoba", 18, titleFmt,
+            RectF(cL, cT, cR, cT + 60.f), g_brushTextPri);
         titleFmt->Release();
     }
 
     IDWriteTextFormat* subFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
-        DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 16.f, L"en-us", &subFmt);
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL, 23.f, L"en-us", &subFmt);
     if (subFmt) {
-        rt->DrawTextW(L"Nirqoba Compiler Suite", 22, subFmt,
-            RectF(cL, cT + 48.f, cR, cT + 72.f),
-            g_brushAccent);
+        rt->DrawTextW(L"Compiler setup for Windows", 26, subFmt,
+            RectF(cL, cT + 72.f, cR, cT + 108.f), g_brushAccent);
         subFmt->Release();
     }
 
-    // Separator line under title
-    rt->DrawLine(D2D1::Point2F(cL, cT + 80.f), D2D1::Point2F(cR, cT + 80.f),
-        g_brushSeparator, 1.f);
-
-    // Subtitle / description card
-    float cardT = cT + 94.f;
-    float cardB = cardT + 130.f;
-    rt->FillRoundedRectangle(RoundedRect(cL, cardT, cR, cardB, 8.f), g_brushSurface);
-
-    // Accent left bar
-    ID2D1SolidColorBrush* accentBar = nullptr;
-    rt->CreateSolidColorBrush(Color::Indigo2, &accentBar);
-    rt->FillRoundedRectangle(RoundedRect(cL, cardT, cL + 4.f, cardB, 2.f), accentBar);
-    accentBar->Release();
+    const float cardT = cT + 146.f;
+    const float cardB = cardT + 150.f;
+    rt->FillRoundedRectangle(RoundedRect(cL, cardT, cR, cardB, 12.f), g_brushSurface);
+    rt->DrawRoundedRectangle(RoundedRect(cL, cardT, cR, cardB, 12.f), g_brushAccentBorder, 1.f);
 
     IDWriteTextFormat* bodyFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 11.f, L"en-us", &bodyFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 22.f, L"en-us", &bodyFmt);
     if (bodyFmt) {
         bodyFmt->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
+        bodyFmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
         const wchar_t* welcomeText =
-            L"This wizard will install Nirqoba v1.0.0 on your computer.\n\n"
-            L"Nirqoba is a modern, statically typed systems programming language "
-            L"with a focus on clarity, performance, and expressiveness. It features "
-            L"a powerful type system, first-class memory management, and a native "
-            L"compiler targeting Windows x64.\n\n"
-            L"It is recommended that you close all other applications before continuing.";
+            L"Choose an install location, review the MIT open-source license, "
+            L"and follow the steps to install Nirqoba.";
         rt->DrawTextW(welcomeText, (UINT32)wcslen(welcomeText), bodyFmt,
-            RectF(cL + 16.f, cardT + 14.f, cR - 12.f, cardB - 10.f),
+            RectF(cL + 36.f, cardT + 24.f, cR - 36.f, cardB - 24.f),
             g_brushTextSec);
         bodyFmt->Release();
     }
-
-    // Feature bullets
-    float featY = cardB + 24.f;
-    struct Feature { const wchar_t* icon; const wchar_t* text; };
-    Feature features[] = {
-        { L"◆", L"Native x64 compiler with LLVM backend" },
-        { L"◆", L"Zero-cost abstractions & manual memory control" },
-        { L"◆", L"Rich standard toolchain with package manager" },
-    };
-    IDWriteTextFormat* bulletFmt = nullptr;
-    g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
-        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 11.f, L"en-us", &bulletFmt);
-
-    for (int i = 0; i < 3; i++) {
-        float y = featY + i * 28.f;
-        ID2D1SolidColorBrush* dotBrush = nullptr;
-        rt->CreateSolidColorBrush(Color::Indigo2, &dotBrush);
-        if (bulletFmt) {
-            rt->DrawTextW(features[i].icon, 1, bulletFmt,
-                RectF(cL, y, cL + 16.f, y + 18.f), dotBrush);
-            rt->DrawTextW(features[i].text, (UINT32)wcslen(features[i].text), bulletFmt,
-                RectF(cL + 20.f, y, cR, y + 18.f), g_brushTextSec);
-        }
-        dotBrush->Release();
-    }
-    if (bulletFmt) bulletFmt->Release();
-
-    // Bottom tip
-    float tipY = (float)WINDOW_H - 80.f;
-    IDWriteTextFormat* tipFmt = nullptr;
-    g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
-        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_ITALIC,
-        DWRITE_FONT_STRETCH_NORMAL, 9.5f, L"en-us", &tipFmt);
-    if (tipFmt) {
-        rt->DrawTextW(L"Click \"Next\" to begin the installation wizard.",
-            44, tipFmt,
-            RectF(cL, tipY, cR, tipY + 18.f),
-            g_brushTextMuted);
-        tipFmt->Release();
-    }
 }
-
 static void DrawPageLicense(ID2D1RenderTarget* rt) {
     float cL = SIDEBAR_W + 40.f;
     float cR = (float)WINDOW_W - 40.f;
@@ -926,29 +699,29 @@ static void DrawPageLicense(ID2D1RenderTarget* rt) {
     IDWriteTextFormat* titleFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_LIGHT, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 22.f, L"en-us", &titleFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 36.f, L"en-us", &titleFmt);
     if (titleFmt) {
         rt->DrawTextW(L"License Agreement", 17, titleFmt,
-            RectF(cL, cT, cR, cT + 34.f), g_brushTextPri);
+            RectF(cL, cT, cR, cT + 52.f), g_brushTextPri);
         titleFmt->Release();
     }
 
     IDWriteTextFormat* subFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 10.f, L"en-us", &subFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 18.f, L"en-us", &subFmt);
     if (subFmt) {
-        rt->DrawTextW(L"Please read the following license agreement carefully.",
-            52, subFmt, RectF(cL, cT + 36.f, cR, cT + 52.f), g_brushTextSec);
+        rt->DrawTextW(L"MIT License", 11, subFmt,
+            RectF(cL, cT + 58.f, cR, cT + 86.f), g_brushTextSec);
         subFmt->Release();
     }
 
-    rt->DrawLine(D2D1::Point2F(cL, cT + 58.f), D2D1::Point2F(cR, cT + 58.f),
+    rt->DrawLine(D2D1::Point2F(cL, cT + 96.f), D2D1::Point2F(cR, cT + 96.f),
         g_brushSeparator, 1.f);
 
     // License text box
-    float boxT = cT + 68.f;
-    float boxB = (float)WINDOW_H - 90.f;
+    float boxT = cT + 108.f;
+    float boxB = (float)WINDOW_H - 100.f;
     rt->FillRoundedRectangle(RoundedRect(cL, boxT, cR, boxB, 6.f), g_brushSurface);
 
     // Accent border
@@ -957,18 +730,18 @@ static void DrawPageLicense(ID2D1RenderTarget* rt) {
     IDWriteTextFormat* licenseFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Cascadia Mono", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 9.5f, L"en-us", &licenseFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 15.f, L"en-us", &licenseFmt);
     if (!licenseFmt) {
         // Fallback to Consolas
         g_dwFactory->CreateTextFormat(L"Consolas", nullptr,
             DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL, 9.5f, L"en-us", &licenseFmt);
+            DWRITE_FONT_STRETCH_NORMAL, 15.f, L"en-us", &licenseFmt);
     }
     if (licenseFmt) {
         licenseFmt->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
         const wchar_t* licenseText =
             L"MIT License\n\n"
-            L"Copyright (c) 2024 Muhammad Tahmid Ahnaf\n\n"
+            L"Copyright (2026-) Muhammad Tahmid Ahnaf\n\n"
             L"Permission is hereby granted, free of charge, to any person obtaining a copy "
             L"of this software and associated documentation files (the \"Software\"), to deal "
             L"in the Software without restriction, including without limitation the rights "
@@ -994,18 +767,6 @@ static void DrawPageLicense(ID2D1RenderTarget* rt) {
         licenseFmt->Release();
     }
 
-    // "I agree" note
-    IDWriteTextFormat* agreeFmt = nullptr;
-    g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
-        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 10.f, L"en-us", &agreeFmt);
-    if (agreeFmt) {
-        rt->DrawTextW(L"By clicking \"Next\" you agree to the terms of the license above.",
-            62, agreeFmt,
-            RectF(cL, boxB + 10.f, cR, boxB + 26.f),
-            g_brushTextMuted);
-        agreeFmt->Release();
-    }
 }
 
 static void DrawPageOptions(ID2D1RenderTarget* rt) {
@@ -1016,78 +777,57 @@ static void DrawPageOptions(ID2D1RenderTarget* rt) {
     IDWriteTextFormat* titleFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_LIGHT, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 22.f, L"en-us", &titleFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 36.f, L"en-us", &titleFmt);
     if (titleFmt) {
         rt->DrawTextW(L"Installation Options", 20, titleFmt,
-            RectF(cL, cT, cR, cT + 34.f), g_brushTextPri);
+            RectF(cL, cT, cR, cT + 52.f), g_brushTextPri);
         titleFmt->Release();
     }
 
     IDWriteTextFormat* subFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 10.f, L"en-us", &subFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 18.f, L"en-us", &subFmt);
     if (subFmt) {
         rt->DrawTextW(L"Choose where to install Nirqoba and configure installation options.",
-            64, subFmt, RectF(cL, cT + 36.f, cR, cT + 52.f), g_brushTextSec);
+            64, subFmt, RectF(cL, cT + 58.f, cR, cT + 86.f), g_brushTextSec);
         subFmt->Release();
     }
 
-    rt->DrawLine(D2D1::Point2F(cL, cT + 58.f), D2D1::Point2F(cR, cT + 58.f),
+    rt->DrawLine(D2D1::Point2F(cL, cT + 96.f), D2D1::Point2F(cR, cT + 96.f),
         g_brushSeparator, 1.f);
 
     // Install Path section
-    float sectionT = cT + 74.f;
+    float sectionT = cT + 120.f;
     IDWriteTextFormat* sectionFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 11.f, L"en-us", &sectionFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 22.f, L"en-us", &sectionFmt);
     if (sectionFmt) {
         rt->DrawTextW(L"Installation Directory", 22, sectionFmt,
-            RectF(cL, sectionT, cR, sectionT + 18.f), g_brushTextPri);
+            RectF(cL, sectionT, cR, sectionT + 32.f), g_brushTextPri);
         sectionFmt->Release();
     }
 
     // Path edit box visualization (behind the actual HWND edit control)
-    float editT = sectionT + 22.f;
-    float editB = editT + 34.f;
-    float editR = cR - 90.f;
+    float editT = sectionT + 42.f;
+    float editB = editT + 52.f;
+    float editR = cR - 150.f;
     rt->FillRoundedRectangle(RoundedRect(cL, editT, editR, editB, 5.f), g_brushSurface);
     rt->DrawRoundedRectangle(RoundedRect(cL, editT, editR, editB, 5.f), g_brushAccentBorder, 1.f);
 
     // Additional options section
-    float optT = editB + 36.f;
+    float optT = editB + 44.f;
     IDWriteTextFormat* optSectionFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 11.f, L"en-us", &optSectionFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 22.f, L"en-us", &optSectionFmt);
     if (optSectionFmt) {
         rt->DrawTextW(L"Additional Options", 18, optSectionFmt,
-            RectF(cL, optT, cR, optT + 18.f), g_brushTextPri);
+            RectF(cL, optT, cR, optT + 32.f), g_brushTextPri);
         optSectionFmt->Release();
     }
 
-    // Disk space info card
-    float diskT = optT + 130.f;
-    rt->FillRoundedRectangle(RoundedRect(cL, diskT, cR, diskT + 52.f, 6.f), g_brushSurface);
-    ID2D1SolidColorBrush* diskAccent = nullptr;
-    rt->CreateSolidColorBrush(Color::SteelBlue, &diskAccent);
-    rt->FillRoundedRectangle(RoundedRect(cL, diskT, cL + 4.f, diskT + 52.f, 2.f), diskAccent);
-    diskAccent->Release();
-
-    IDWriteTextFormat* diskFmt = nullptr;
-    g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
-        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 10.f, L"en-us", &diskFmt);
-    if (diskFmt) {
-        rt->DrawTextW(L"Space required:  48.2 MB",
-            24, diskFmt, RectF(cL + 16.f, diskT + 10.f, cR - 10.f, diskT + 26.f),
-            g_brushTextSec);
-        rt->DrawTextW(L"Available:           182.6 GB",
-            29, diskFmt, RectF(cL + 16.f, diskT + 28.f, cR - 10.f, diskT + 44.f),
-            g_brushTextSec);
-        diskFmt->Release();
-    }
 }
 
 static void DrawPageInstalling(ID2D1RenderTarget* rt) {
@@ -1103,7 +843,7 @@ static void DrawPageInstalling(ID2D1RenderTarget* rt) {
     IDWriteTextFormat* titleFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_LIGHT, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 20.f, L"en-us", &titleFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 34.f, L"en-us", &titleFmt);
     if (titleFmt) {
         titleFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         rt->DrawTextW(L"Installing Nirqoba...", 21, titleFmt,
@@ -1129,7 +869,7 @@ static void DrawPageInstalling(ID2D1RenderTarget* rt) {
     IDWriteTextFormat* statusFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 10.5f, L"en-us", &statusFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 18.f, L"en-us", &statusFmt);
     if (statusFmt) {
         statusFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         rt->DrawTextW(statusText, (UINT32)wcslen(statusText), statusFmt,
@@ -1173,7 +913,7 @@ static void DrawPageInstalling(ID2D1RenderTarget* rt) {
     IDWriteTextFormat* pctFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 10.f, L"en-us", &pctFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 16.f, L"en-us", &pctFmt);
     if (pctFmt) {
         pctFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         rt->DrawTextW(pctText, (UINT32)wcslen(pctText), pctFmt,
@@ -1191,7 +931,7 @@ static void DrawPageFinish(ID2D1RenderTarget* rt) {
     // Success checkmark circle
     float checkCx = cMidX;
     float checkCy = cT + 70.f;
-    float checkR  = 38.f;
+    float checkR  = 52.f;
 
     ID2D1SolidColorBrush* greenFill = nullptr;
     ID2D1SolidColorBrush* greenStroke = nullptr;
@@ -1223,7 +963,7 @@ static void DrawPageFinish(ID2D1RenderTarget* rt) {
     IDWriteTextFormat* titleFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_LIGHT, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 26.f, L"en-us", &titleFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 40.f, L"en-us", &titleFmt);
     if (titleFmt) {
         titleFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         rt->DrawTextW(L"Installation Complete!", 21, titleFmt,
@@ -1235,7 +975,7 @@ static void DrawPageFinish(ID2D1RenderTarget* rt) {
     IDWriteTextFormat* subFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 11.f, L"en-us", &subFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 22.f, L"en-us", &subFmt);
     if (subFmt) {
         subFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         subFmt->SetWordWrapping(DWRITE_WORD_WRAPPING_WRAP);
@@ -1259,7 +999,7 @@ static void DrawPageFinish(ID2D1RenderTarget* rt) {
     IDWriteTextFormat* infoFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 10.f, L"en-us", &infoFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 18.f, L"en-us", &infoFmt);
     if (infoFmt) {
         rt->DrawTextW(L"Installed to:", 13, infoFmt,
             RectF(cL + 16.f, infoT + 10.f, cR - 10.f, infoT + 26.f), g_brushTextMuted);
@@ -1267,11 +1007,11 @@ static void DrawPageFinish(ID2D1RenderTarget* rt) {
         IDWriteTextFormat* pathFmt = nullptr;
         g_dwFactory->CreateTextFormat(L"Cascadia Mono", nullptr,
             DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL, 9.5f, L"en-us", &pathFmt);
+            DWRITE_FONT_STRETCH_NORMAL, 17.f, L"en-us", &pathFmt);
         if (!pathFmt) {
             g_dwFactory->CreateTextFormat(L"Consolas", nullptr,
                 DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL, 9.5f, L"en-us", &pathFmt);
+                DWRITE_FONT_STRETCH_NORMAL, 17.f, L"en-us", &pathFmt);
         }
         if (pathFmt) {
             rt->DrawTextW(g_installPath.c_str(), (UINT32)g_installPath.size(), pathFmt,
@@ -1290,7 +1030,7 @@ static void DrawPageFinish(ID2D1RenderTarget* rt) {
 // Button bar drawing
 // ---------------------------------------------------------------------------
 static void DrawButtonBar(ID2D1RenderTarget* rt) {
-    float barT = (float)WINDOW_H - 58.f;
+    float barT = (float)WINDOW_H - 84.f;
     float barB = (float)WINDOW_H;
     float cL   = (float)SIDEBAR_W;
     float cR   = (float)WINDOW_W;
@@ -1298,6 +1038,11 @@ static void DrawButtonBar(ID2D1RenderTarget* rt) {
     // Bar background
     rt->FillRectangle(RectF(cL, barT, cR, barB), g_brushPanel);
     rt->DrawLine(D2D1::Point2F(cL, barT), D2D1::Point2F(cR, barT), g_brushSeparator, 1.f);
+}
+
+static void StartPageTransition() {
+    g_transitionProgress = 0.f;
+    SetTimer(g_hWnd, ID_TIMER_TRANSITION, 16, nullptr);
 }
 
 // ---------------------------------------------------------------------------
@@ -1318,6 +1063,11 @@ static void OnRender() {
     // Title bar in content area
     DrawTitleBar(g_renderTarget);
 
+    // Slide each new page into place with a short ease-out transition.
+    float t = std::max(0.f, std::min(1.f, g_transitionProgress));
+    float eased = 1.f - (1.f - t) * (1.f - t) * (1.f - t);
+    g_renderTarget->SetTransform(D2D1::Matrix3x2F::Translation((1.f - eased) * 44.f, 0.f));
+
     // Page content
     switch (g_currentPage) {
         case PAGE_WELCOME:   DrawPageWelcome(g_renderTarget);   break;
@@ -1326,6 +1076,7 @@ static void OnRender() {
         case PAGE_INSTALLING:DrawPageInstalling(g_renderTarget);break;
         case PAGE_FINISH:    DrawPageFinish(g_renderTarget);    break;
     }
+    g_renderTarget->SetTransform(D2D1::Matrix3x2F::Identity());
 
     // Button bar
     DrawButtonBar(g_renderTarget);
@@ -1397,6 +1148,8 @@ static void GoNextPage() {
     } else if (g_currentPage < PAGE_OPTIONS) {
         g_currentPage = (InstallerPage)((int)g_currentPage + 1);
     }
+    if (g_currentPage != PAGE_INSTALLING && g_currentPage != PAGE_FINISH)
+        StartPageTransition();
     UpdateNativeControls();
     InvalidateRect(g_hWnd, nullptr, FALSE);
 }
@@ -1407,6 +1160,7 @@ static void GoPrevPage() {
         g_currentPage != PAGE_FINISH)
     {
         g_currentPage = (InstallerPage)((int)g_currentPage - 1);
+        StartPageTransition();
         UpdateNativeControls();
         InvalidateRect(g_hWnd, nullptr, FALSE);
     }
@@ -1428,12 +1182,12 @@ static void CreateNativeControls(HWND hWnd) {
     g_hEditPath = CreateWindowExW(
         0, L"EDIT", g_installPath.c_str(),
         WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
-        (int)cL + 1, (int)editT + 1, (int)(editR - cL - 2), 32,
+        (int)cL + 1, (int)editT + 1, (int)(editR - cL - 2), 52,
         hWnd, (HMENU)ID_EDIT_PATH, g_hInst, nullptr);
 
     // Style the edit box to match dark theme
     if (g_hEditPath) {
-        HFONT hFont = CreateFontW(15, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+        HFONT hFont = CreateFontW(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
         SendMessageW(g_hEditPath, WM_SETFONT, (WPARAM)hFont, TRUE);
@@ -1442,29 +1196,29 @@ static void CreateNativeControls(HWND hWnd) {
 
     // Browse button
     g_hBtnBrowse = CreateWindowExW(
-        0, L"BUTTON", L"Browse...",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        (int)editR + 6, (int)editT, 78, 34,
+        0, L"BUTTON", L"Browse",
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        (int)editR + 12, (int)editT, 132, 54,
         hWnd, (HMENU)ID_BTN_BROWSE, g_hInst, nullptr);
 
     // Checkboxes
-    float optT = editT + 34.f + 36.f;
+    float optT = editT + 52.f + 44.f;
     g_hChkDesktop = CreateWindowExW(
         0, L"BUTTON", L"Create desktop shortcut",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        (int)cL, (int)optT, (int)(cR - cL), 24,
+        (int)cL, (int)optT, (int)(cR - cL), 36,
         hWnd, (HMENU)ID_CHK_DESKTOP, g_hInst, nullptr);
     SendMessageW(g_hChkDesktop, BM_SETCHECK, BST_CHECKED, 0);
 
     g_hChkPath = CreateWindowExW(
         0, L"BUTTON", L"Add Nirqoba to system PATH",
         WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        (int)cL, (int)optT + 28.f, (int)(cR - cL), 24,
+        (int)cL, (int)optT + 44.f, (int)(cR - cL), 36,
         hWnd, (HMENU)ID_CHK_PATH, g_hInst, nullptr);
     SendMessageW(g_hChkPath, BM_SETCHECK, BST_CHECKED, 0);
 
     // Style native controls with Segoe UI
-    HFONT hFont = CreateFontW(14, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+    HFONT hFont = CreateFontW(18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
     if (g_hBtnBrowse)  SendMessageW(g_hBtnBrowse,  WM_SETFONT, (WPARAM)hFont, TRUE);
@@ -1472,34 +1226,34 @@ static void CreateNativeControls(HWND hWnd) {
     if (g_hChkPath)    SendMessageW(g_hChkPath,    WM_SETFONT, (WPARAM)hFont, TRUE);
 
     // Navigation buttons (always visible in button bar)
-    float btnBarT = WINDOW_H - 58.f;
-    float btnH    = 34.f;
-    float btnW    = 100.f;
-    float btnMarR = WINDOW_W - 20.f;
+    float btnBarT = WINDOW_H - 84.f;
+    float btnH    = 54.f;
+    float btnW    = 144.f;
+    float btnMarR = WINDOW_W - 32.f;
 
-    HFONT hBtnFont = CreateFontW(14, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+    HFONT hBtnFont = CreateFontW(18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
         DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
         CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
 
     // Cancel button (leftmost in button bar)
     g_hBtnCancel = CreateWindowExW(
         0, L"BUTTON", L"Cancel",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        SIDEBAR_W + 20, (int)btnBarT + 12, 88, (int)btnH,
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        SIDEBAR_W + 32, (int)btnBarT + 15, 112, (int)btnH,
         hWnd, (HMENU)ID_BTN_CANCEL, g_hInst, nullptr);
 
     // Back button
     g_hBtnBack = CreateWindowExW(
         0, L"BUTTON", L"‹ Back",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON,
-        (int)btnMarR - 2 * (int)btnW - 14, (int)btnBarT + 12, (int)btnW, (int)btnH,
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        (int)btnMarR - 2 * (int)btnW - 16, (int)btnBarT + 15, (int)btnW, (int)btnH,
         hWnd, (HMENU)ID_BTN_BACK, g_hInst, nullptr);
 
     // Next button (primary)
     g_hBtnNext = CreateWindowExW(
         0, L"BUTTON", L"Next ›",
-        WS_CHILD | WS_VISIBLE | BS_PUSHBUTTON | BS_DEFPUSHBUTTON,
-        (int)btnMarR - (int)btnW, (int)btnBarT + 12, (int)btnW, (int)btnH,
+        WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
+        (int)btnMarR - (int)btnW, (int)btnBarT + 15, (int)btnW, (int)btnH,
         hWnd, (HMENU)ID_BTN_NEXT, g_hInst, nullptr);
 
     if (g_hBtnNext)   SendMessageW(g_hBtnNext,   WM_SETFONT, (WPARAM)hBtnFont, TRUE);
@@ -1515,6 +1269,42 @@ static void CreateNativeControls(HWND hWnd) {
 static HBRUSH g_hDarkBrush   = nullptr;
 static HBRUSH g_hSurfBrush   = nullptr;
 static HBRUSH g_hEditBrush   = nullptr;
+
+static void DrawStyledButton(const DRAWITEMSTRUCT* item) {
+    if (!item || !item->hWnd) return;
+    const bool primary = item->CtlID == ID_BTN_NEXT;
+    const bool disabled = (item->itemState & ODS_DISABLED) != 0;
+    const bool pressed = (item->itemState & ODS_SELECTED) != 0;
+    COLORREF fillColor = disabled ? RGB(45, 54, 70)
+        : primary ? (pressed ? RGB(73, 63, 159) : RGB(101, 91, 206))
+        : (pressed ? RGB(30, 48, 70) : RGB(20, 37, 56));
+    COLORREF borderColor = disabled ? RGB(57, 67, 82)
+        : primary ? RGB(137, 127, 235) : RGB(58, 78, 103);
+    COLORREF textColor = disabled ? RGB(132, 145, 162) : RGB(242, 245, 255);
+
+    HBRUSH fill = CreateSolidBrush(fillColor);
+    HPEN border = CreatePen(PS_SOLID, 1, borderColor);
+    HGDIOBJ oldBrush = SelectObject(item->hDC, fill);
+    HGDIOBJ oldPen = SelectObject(item->hDC, border);
+    RoundRect(item->hDC, item->rcItem.left, item->rcItem.top,
+        item->rcItem.right, item->rcItem.bottom, 12, 12);
+    SelectObject(item->hDC, oldBrush);
+    SelectObject(item->hDC, oldPen);
+    DeleteObject(fill);
+    DeleteObject(border);
+
+    wchar_t label[80] = {};
+    GetWindowTextW(item->hwndItem, label, ARRAYSIZE(label));
+    RECT textRect = item->rcItem;
+    SetBkMode(item->hDC, TRANSPARENT);
+    SetTextColor(item->hDC, textColor);
+    DrawTextW(item->hDC, label, -1, &textRect,
+        DT_CENTER | DT_VCENTER | DT_SINGLELINE | DT_NOPREFIX);
+    if (item->itemState & ODS_FOCUS) {
+        InflateRect(&textRect, -8, -7);
+        DrawFocusRect(item->hDC, &textRect);
+    }
+}
 
 LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     switch (msg) {
@@ -1550,7 +1340,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     }
 
     case WM_TIMER:
-        if (wParam == 1) {
+        if (wParam == ID_TIMER_TRANSITION) {
+            g_transitionProgress = std::min(1.f, g_transitionProgress + 0.10f);
+            if (g_transitionProgress >= 1.f)
+                KillTimer(hWnd, ID_TIMER_TRANSITION);
+            InvalidateRect(hWnd, nullptr, FALSE);
+        } else if (wParam == 1) {
             g_animT += 0.016f;
             if (g_currentPage == PAGE_INSTALLING) {
                 InvalidateRect(hWnd, nullptr, FALSE);
@@ -1568,6 +1363,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         } else if (wParam == 300) {
             KillTimer(hWnd, 300);
             g_currentPage = PAGE_FINISH;
+            StartPageTransition();
             UpdateNativeControls();
             InvalidateRect(hWnd, nullptr, FALSE);
         }
@@ -1592,6 +1388,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         InvalidateRect(hWnd, nullptr, FALSE);
         return 0;
     }
+
+    case WM_MOVE:
+        RedrawWindow(hWnd, nullptr, nullptr,
+            RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+        return 0;
+
+    case WM_DRAWITEM:
+        DrawStyledButton(reinterpret_cast<const DRAWITEMSTRUCT*>(lParam));
+        return TRUE;
 
     // Dark theme for native controls
     case WM_CTLCOLOREDIT:
@@ -1711,6 +1516,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_DESTROY:
         KillTimer(hWnd, 1);
         KillTimer(hWnd, ID_TIMER_PROGRESS);
+        KillTimer(hWnd, ID_TIMER_TRANSITION);
         DiscardDeviceResources();
         if (g_hDarkBrush) { DeleteObject(g_hDarkBrush); g_hDarkBrush = nullptr; }
         if (g_hSurfBrush) { DeleteObject(g_hSurfBrush); g_hSurfBrush = nullptr; }
@@ -1770,7 +1576,7 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         WS_EX_APPWINDOW,
         L"NirqobaInstallerWnd",
         L"Nirqoba Setup",
-        WS_POPUP | WS_MINIMIZEBOX | WS_THICKFRAME,
+        WS_POPUP | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         winX, winY, WINDOW_W, WINDOW_H,
         nullptr, nullptr, hInstance, nullptr);
 
