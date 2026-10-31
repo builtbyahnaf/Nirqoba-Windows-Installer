@@ -8,7 +8,7 @@ This directory contains a Windows packaging foundation for the Nirqoba compiler.
 - `build_scripts/stage_package.ps1` collects the compiler, runtime library, examples, and docs.
 - `build_scripts/build_installer.bat` builds an installer from the staged package.
 - `installer_scripts/nirqoba_installer.iss` defines the Inno Setup installer.
-- `dist/` contains generated package and installer output; do not commit these build artifacts.
+
 
 ## Build
 
