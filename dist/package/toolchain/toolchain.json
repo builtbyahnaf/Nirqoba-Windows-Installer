@@ -1,0 +1,22 @@
+﻿{
+    "schema":  1,
+    "generatedAt":  "2026-10-31T18:23:50.9762193+06:00",
+    "llvmVersion":  "23.1.4",
+    "llvmPrefix":  "D:\\Actual Project Files\\Project Nirqoba\\toolchain\\llvm-23.1.4",
+    "mlirDir":  "D:\\Actual Project Files\\Project Nirqoba\\toolchain\\llvm-23.1.4\\lib\\cmake\\mlir",
+    "llvmDir":  "D:\\Actual Project Files\\Project Nirqoba\\toolchain\\llvm-23.1.4\\lib\\cmake\\llvm",
+    "mlirTblgen":  "D:\\Actual Project Files\\Project Nirqoba\\toolchain\\llvm-23.1.4\\bin\\mlir-tblgen.exe",
+    "linker":  "D:\\Actual Project Files\\Project Nirqoba\\toolchain\\llvm-23.1.4\\bin\\lld-link.exe",
+    "linkerFallback":  "C:\\Program Files\\Microsoft Visual Studio\\18\\BuildTools\\VC\\Tools\\MSVC\\14.51.36231\\bin\\Hostx64\\x64\\link.exe",
+    "vcvars64":  "C:\\Program Files\\Microsoft Visual Studio\\18\\BuildTools\\VC\\Auxiliary\\Build\\vcvars64.bat",
+    "msvcToolset":  "14.51.36231",
+    "clExe":  "C:\\Program Files\\Microsoft Visual Studio\\18\\BuildTools\\VC\\Tools\\MSVC\\14.51.36231\\bin\\Hostx64\\x64\\cl.exe",
+    "msvcLib":  "C:\\Program Files\\Microsoft Visual Studio\\18\\BuildTools\\VC\\Tools\\MSVC\\14.51.36231\\lib\\x64",
+    "sdkVersion":  "10.0.26100.0",
+    "sdkUcrtLib":  "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\ucrt\\x64",
+    "sdkUmLib":  "C:\\Program Files (x86)\\Windows Kits\\10\\Lib\\10.0.26100.0\\um\\x64",
+    "cmakeVersion":  "cmake version 4.5.0-rc2",
+    "ninjaVersion":  "1.13.2",
+    "ninjaExe":  "C:\\Users\\USER\\AppData\\Local\\Microsoft\\WinGet\\Links\\ninja.exe",
+    "pythonVersion":  "3.12"
+}
