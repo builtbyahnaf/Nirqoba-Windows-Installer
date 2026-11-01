@@ -172,6 +172,8 @@ static HWND          g_hBtnBack   = nullptr;
 static HWND          g_hBtnCancel = nullptr;
 static HWND          g_hBtnBrowse = nullptr;
 static int           g_hoverOptCard = 0; // 0 = none, 1 = PATH card, 2 = Desktop shortcut card
+static bool          g_hoverCloseBtn = false;
+static bool          g_hoverMinBtn   = false;
 
 // Fonts and control procs
 static HFONT         g_hLicenseFont = nullptr;
@@ -696,36 +698,38 @@ static void DrawTitleBar(ID2D1RenderTarget* rt) {
         fmt->Release();
     }
 
-    // Window control buttons area (close / minimize) — drawn, but functional via WM_NCHITTEST
-    float btnSize = TITLEBAR_H * 0.6f;
-    float btnY = (TITLEBAR_H - btnSize) / 2.f;
+    // Modern window control buttons: Minimize [-] and Close [X]
+    float btnW = 48.f;
+    float btnH = (float)TITLEBAR_H;
 
-    // Close button area
-    float closeX = contentR - btnSize - 8.f;
-    // Minimize button
-    float minX   = closeX - btnSize - 4.f;
+    // Minimize button rect: [contentR - 96, contentR - 48]
+    float minL = contentR - btnW * 2.f;
+    float minR = minL + btnW;
+    if (g_hoverMinBtn) {
+        rt->FillRectangle(RectF(minL, 0, minR, btnH), g_brushSurfaceLight);
+    }
+    ID2D1SolidColorBrush* minGlyphBrush = g_hoverMinBtn ? g_brushWhite : g_brushTextSec;
+    float minMidX = (minL + minR) / 2.f;
+    float minMidY = btnH / 2.f;
+    rt->DrawLine(D2D1::Point2F(minMidX - 7.f, minMidY), D2D1::Point2F(minMidX + 7.f, minMidY), minGlyphBrush, 2.0f);
 
-    // Minimal icon hints
-    ID2D1SolidColorBrush* iconBrush = nullptr;
-    rt->CreateSolidColorBrush(D2D1::ColorF(0x5A6A80, 0.7f), &iconBrush);
-
-    // Minimize: dash
-    rt->DrawLine(
-        D2D1::Point2F(minX + btnSize*0.25f, TITLEBAR_H/2.f),
-        D2D1::Point2F(minX + btnSize*0.75f, TITLEBAR_H/2.f),
-        iconBrush, 1.5f);
-
-    // Close: X
-    rt->DrawLine(
-        D2D1::Point2F(closeX + btnSize*0.25f, btnY + btnSize*0.25f),
-        D2D1::Point2F(closeX + btnSize*0.75f, btnY + btnSize*0.75f),
-        iconBrush, 1.5f);
-    rt->DrawLine(
-        D2D1::Point2F(closeX + btnSize*0.75f, btnY + btnSize*0.25f),
-        D2D1::Point2F(closeX + btnSize*0.25f, btnY + btnSize*0.75f),
-        iconBrush, 1.5f);
-
-    iconBrush->Release();
+    // Close button rect: [contentR - 48, contentR]
+    float closeL = contentR - btnW;
+    float closeR = contentR;
+    if (g_hoverCloseBtn) {
+        ID2D1SolidColorBrush* closeHoverBg = nullptr;
+        rt->CreateSolidColorBrush(D2D1::ColorF(0xE81123), &closeHoverBg);
+        rt->FillRectangle(RectF(closeL, 0, closeR, btnH), closeHoverBg);
+        closeHoverBg->Release();
+    }
+    ID2D1SolidColorBrush* closeGlyphBrush = g_hoverCloseBtn ? g_brushWhite : g_brushTextSec;
+    float closeMidX = (closeL + closeR) / 2.f;
+    float closeMidY = btnH / 2.f;
+    float xRadius = 6.f;
+    rt->DrawLine(D2D1::Point2F(closeMidX - xRadius, closeMidY - xRadius),
+                 D2D1::Point2F(closeMidX + xRadius, closeMidY + xRadius), closeGlyphBrush, 2.0f);
+    rt->DrawLine(D2D1::Point2F(closeMidX + xRadius, closeMidY - xRadius),
+                 D2D1::Point2F(closeMidX - xRadius, closeMidY + xRadius), closeGlyphBrush, 2.0f);
 }
 
 // ---------------------------------------------------------------------------
@@ -1560,7 +1564,7 @@ static void GoNextPage() {
         g_statusText  = L"Preparing installation...";
         CreateThread(nullptr, 0, InstallWorkerThread, g_hWnd, 0, nullptr);
     } else if (g_currentPage == PAGE_FINISH) {
-        DestroyWindow(g_hWnd);
+        SendMessageW(g_hWnd, WM_CLOSE, 0, 0);
     } else if (g_currentPage < PAGE_OPTIONS) {
         g_currentPage = (InstallerPage)((int)g_currentPage + 1);
     }
@@ -1774,20 +1778,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     }
 
-    case WM_NCCALCSIZE:
-        if (wParam == TRUE) return 0;
-        break;
-
-    case WM_GETMINMAXINFO:
-    {
-        MINMAXINFO* mmi = (MINMAXINFO*)lParam;
-        mmi->ptMinTrackSize.x = WINDOW_W;
-        mmi->ptMinTrackSize.y = WINDOW_H;
-        mmi->ptMaxTrackSize.x = WINDOW_W;
-        mmi->ptMaxTrackSize.y = WINDOW_H;
-        return 0;
-    }
-
     case WM_TIMER:
         if (wParam == ID_TIMER_TRANSITION) {
             g_transitionProgress = std::min(1.f, g_transitionProgress + 0.10f);
@@ -1897,18 +1887,20 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     // Frameless window: allow dragging from title bar area
     case WM_NCHITTEST:
     {
-        LRESULT result = DefWindowProcW(hWnd, msg, wParam, lParam);
-        if (result == HTCLIENT) {
-            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            ScreenToClient(hWnd, &pt);
-            // Drag from title bar area
-            if (pt.y < TITLEBAR_H && pt.x > SIDEBAR_W) {
-                float btnSize = TITLEBAR_H * 0.6f;
-                if (pt.x < WINDOW_W - btnSize * 2 - 16)
-                    return HTCAPTION;
-            }
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        ScreenToClient(hWnd, &pt);
+
+        // If mouse is over minimize or close buttons, return HTCLIENT so click & hover work
+        if (pt.y >= 0 && pt.y < TITLEBAR_H && pt.x >= (float)WINDOW_W - 96.f) {
+            return HTCLIENT;
         }
-        return result;
+
+        // Drag along title bar area
+        if (pt.y >= 0 && pt.y < TITLEBAR_H) {
+            return HTCAPTION;
+        }
+
+        return HTCLIENT;
     }
 
     // Window control buttons (hit on the X and minimize icons we drew)
@@ -1922,17 +1914,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_LBUTTONDOWN:
     {
         POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-        float btnSize = TITLEBAR_H * 0.6f;
-        float closeX  = WINDOW_W - btnSize - 8.f;
-        float minX    = closeX - btnSize - 4.f;
-        float btnY    = (TITLEBAR_H - btnSize) / 2.f;
+        float btnW = 48.f;
+        float closeL = (float)WINDOW_W - btnW;
+        float minL   = (float)WINDOW_W - btnW * 2.f;
 
-        if (pt.y >= btnY && pt.y <= btnY + btnSize && pt.x > SIDEBAR_W) {
-            if (pt.x >= closeX && pt.x <= closeX + btnSize) {
-                DestroyWindow(hWnd);
+        if (pt.y >= 0 && pt.y <= TITLEBAR_H) {
+            if (pt.x >= closeL && pt.x <= (float)WINDOW_W) {
+                SendMessageW(hWnd, WM_CLOSE, 0, 0);
                 return 0;
             }
-            if (pt.x >= minX && pt.x <= minX + btnSize) {
+            if (pt.x >= minL && pt.x < closeL) {
                 ShowWindow(hWnd, SW_MINIMIZE);
                 return 0;
             }
@@ -1979,8 +1970,24 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
     case WM_MOUSEMOVE:
     {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        float btnW = 48.f;
+        float closeL = (float)WINDOW_W - btnW;
+        float minL   = (float)WINDOW_W - btnW * 2.f;
+
+        bool newHoverClose = (pt.y >= 0 && pt.y <= TITLEBAR_H && pt.x >= closeL && pt.x <= (float)WINDOW_W);
+        bool newHoverMin   = (pt.y >= 0 && pt.y <= TITLEBAR_H && pt.x >= minL && pt.x < closeL);
+
+        if (newHoverClose != g_hoverCloseBtn || newHoverMin != g_hoverMinBtn) {
+            g_hoverCloseBtn = newHoverClose;
+            g_hoverMinBtn = newHoverMin;
+            InvalidateRect(hWnd, nullptr, FALSE);
+        }
+
+        TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hWnd, 0 };
+        TrackMouseEvent(&tme);
+
         if (g_currentPage == PAGE_OPTIONS) {
-            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             float l1, t1, r1, b1, l2, t2, r2, b2;
             GetOptionCardRect(1, l1, t1, r1, b1);
             GetOptionCardRect(2, l2, t2, r2, b2);
@@ -1996,16 +2003,15 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 g_hoverOptCard = newHover;
                 InvalidateRect(hWnd, nullptr, FALSE);
             }
-
-            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hWnd, 0 };
-            TrackMouseEvent(&tme);
         }
         break;
     }
 
     case WM_MOUSELEAVE:
     {
-        if (g_hoverOptCard != 0) {
+        if (g_hoverCloseBtn || g_hoverMinBtn || g_hoverOptCard != 0) {
+            g_hoverCloseBtn = false;
+            g_hoverMinBtn = false;
             g_hoverOptCard = 0;
             InvalidateRect(hWnd, nullptr, FALSE);
         }
@@ -2028,15 +2034,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case ID_BTN_NEXT:   GoNextPage();  break;
         case ID_BTN_BACK:   GoPrevPage();  break;
         case ID_BTN_CANCEL:
-            if (g_currentPage == PAGE_FINISH)
-                DestroyWindow(hWnd);
-            else {
-                if (MessageBoxW(hWnd,
-                    L"Are you sure you want to cancel the installation?",
-                    L"Cancel Installation",
-                    MB_YESNO | MB_ICONQUESTION) == IDYES)
-                    DestroyWindow(hWnd);
-            }
+            SendMessageW(hWnd, WM_CLOSE, 0, 0);
             break;
         case ID_BTN_BROWSE:
         {
@@ -2075,6 +2073,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 MB_YESNO | MB_ICONQUESTION) != IDYES)
                 return 0;
         }
+        AnimateWindow(hWnd, 140, AW_BLEND | AW_HIDE);
         DestroyWindow(hWnd);
         return 0;
 
@@ -2204,19 +2203,19 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     int winX    = (screenW - WINDOW_W) / 2;
     int winY    = (screenH - WINDOW_H) / 2;
 
-    // Create borderless window with drop shadow and native DWM open/close animation
+    // Create borderless window with drop shadow
     HWND hWnd = CreateWindowExW(
         WS_EX_APPWINDOW,
         L"NirqobaInstallerWnd",
         L"Nirqoba Setup",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_THICKFRAME | WS_CLIPCHILDREN,
+        WS_POPUP | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         winX, winY, WINDOW_W, WINDOW_H,
         nullptr, nullptr, hInstance, nullptr);
 
     if (!hWnd) return 1;
 
-    ShowWindow(hWnd, nCmdShow);
     UpdateWindow(hWnd);
+    AnimateWindow(hWnd, 180, AW_BLEND | AW_ACTIVATE);
 
     MSG msg = {};
     while (GetMessageW(&msg, nullptr, 0, 0)) {

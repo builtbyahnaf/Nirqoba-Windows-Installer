@@ -1,0 +1,8 @@
+// Resource file for Nirqoba Uninstaller
+#include <windows.h>
+
+// Application icon
+1 ICON "nirqoba_installer.ico"
+
+// UAC Manifest — requests admin elevation if needed
+1 RT_MANIFEST "installer.manifest"

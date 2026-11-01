@@ -57,12 +57,11 @@ namespace Color {
 static const int WINDOW_W = 1000;
 static const int WINDOW_H = 600;
 static const int SIDEBAR_W = 280;
-static const int TITLEBAR_H = 46;
+static const int TITLEBAR_H = 52;
 
 static const int ID_BTN_UNINSTALL = 201;
 static const int ID_BTN_CANCEL    = 202;
 static const int ID_TIMER_ANIM    = 1;
-static const int ID_TIMER_WORK    = 2;
 static const UINT WM_UNINSTALL_PROGRESS = WM_USER + 10;
 static const UINT WM_UNINSTALL_COMPLETE = WM_USER + 11;
 
@@ -78,11 +77,11 @@ static ID2D1Factory* g_d2dFactory = nullptr;
 static ID2D1HwndRenderTarget* g_renderTarget = nullptr;
 static IDWriteFactory* g_dwFactory = nullptr;
 static IWICImagingFactory* g_wicFactory = nullptr;
-static ID2D1Bitmap* g_logoBitmap = nullptr;
 
 static ID2D1SolidColorBrush* g_brushWhite = nullptr;
 static ID2D1SolidColorBrush* g_brushBg = nullptr;
 static ID2D1SolidColorBrush* g_brushSurface = nullptr;
+static ID2D1SolidColorBrush* g_brushSurfaceLight = nullptr;
 static ID2D1SolidColorBrush* g_brushAccent = nullptr;
 static ID2D1SolidColorBrush* g_brushTextPri = nullptr;
 static ID2D1SolidColorBrush* g_brushTextSec = nullptr;
@@ -104,7 +103,8 @@ static std::wstring g_statusText = L"Preparing uninstallation...";
 static HWND g_hBtnAction = nullptr;
 static HWND g_hBtnCancel = nullptr;
 static HFONT g_hBtnFont = nullptr;
-static bool g_removeFromPath = true;
+static bool g_hoverCloseBtn = false;
+static bool g_hoverMinBtn   = false;
 
 static D2D1_RECT_F RectF(float l, float t, float r, float b) { return D2D1::RectF(l, t, r, b); }
 static D2D1_ROUNDED_RECT RoundedRect(float l, float t, float r, float b, float rx, float ry = -1.f) {
@@ -120,6 +120,35 @@ static D2D1_ELLIPSE Ellipse(float cx, float cy, float rx, float ry) {
     e.radiusX = rx;
     e.radiusY = ry;
     return e;
+}
+
+// ---------------------------------------------------------------------------
+// UAC Elevation Helpers
+// ---------------------------------------------------------------------------
+static bool IsElevated() {
+    BOOL elevated = FALSE;
+    HANDLE token  = nullptr;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        TOKEN_ELEVATION elev = {};
+        DWORD cbSize = sizeof(elev);
+        if (GetTokenInformation(token, TokenElevation, &elev, cbSize, &cbSize))
+            elevated = elev.TokenIsElevated;
+        CloseHandle(token);
+    }
+    return elevated != FALSE;
+}
+
+static bool RelaunchElevated() {
+    wchar_t exePath[MAX_PATH];
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+
+    SHELLEXECUTEINFOW sei = {};
+    sei.cbSize       = sizeof(sei);
+    sei.lpVerb       = L"runas";
+    sei.lpFile       = exePath;
+    sei.nShow        = SW_NORMAL;
+    sei.fMask        = SEE_MASK_NOASYNC;
+    return ShellExecuteExW(&sei) != FALSE;
 }
 
 static bool RemoveFromPathSafely(const std::wstring& dirToRemove, bool perUser) {
@@ -195,7 +224,6 @@ static void DeleteDirectoryRecursive(const std::wstring& path) {
             DeleteDirectoryRecursive(item);
             RemoveDirectoryW(item.c_str());
         } else {
-            // If it is uninstall.exe, we cannot delete it while running; it will be deleted by the self-delete helper
             SetFileAttributesW(item.c_str(), FILE_ATTRIBUTE_NORMAL);
             DeleteFileW(item.c_str());
         }
@@ -277,7 +305,7 @@ static void DrawStyledButton(const DRAWITEMSTRUCT* item) {
     HGDIOBJ oldBrush = SelectObject(item->hDC, fill);
     HGDIOBJ oldPen = SelectObject(item->hDC, border);
     RoundRect(item->hDC, item->rcItem.left, item->rcItem.top,
-        item->rcItem.right, item->rcItem.bottom, 10, 10);
+        item->rcItem.right, item->rcItem.bottom, 12, 12);
     SelectObject(item->hDC, oldBrush);
     SelectObject(item->hDC, oldPen);
     DeleteObject(fill);
@@ -315,6 +343,7 @@ static HRESULT CreateDeviceResources() {
         rt->CreateSolidColorBrush(Color::White, &g_brushWhite);
         rt->CreateSolidColorBrush(Color::Background, &g_brushBg);
         rt->CreateSolidColorBrush(Color::Surface, &g_brushSurface);
+        rt->CreateSolidColorBrush(Color::SurfaceLight, &g_brushSurfaceLight);
         rt->CreateSolidColorBrush(Color::Accent, &g_brushAccent);
         rt->CreateSolidColorBrush(Color::TextPrimary, &g_brushTextPri);
         rt->CreateSolidColorBrush(Color::TextSecondary, &g_brushTextSec);
@@ -357,6 +386,7 @@ static void DiscardDeviceResources() {
     rel((IUnknown**)&g_brushWhite);
     rel((IUnknown**)&g_brushBg);
     rel((IUnknown**)&g_brushSurface);
+    rel((IUnknown**)&g_brushSurfaceLight);
     rel((IUnknown**)&g_brushAccent);
     rel((IUnknown**)&g_brushTextPri);
     rel((IUnknown**)&g_brushTextSec);
@@ -374,6 +404,15 @@ static void DiscardDeviceResources() {
 
 static void DrawSidebar(ID2D1RenderTarget* rt) {
     rt->FillRectangle(RectF(0, 0, (float)SIDEBAR_W, (float)WINDOW_H), g_brushSidebarGrad);
+
+    // Subtle right border
+    ID2D1SolidColorBrush* borderBrush = nullptr;
+    rt->CreateSolidColorBrush(D2D1::ColorF(0x3A4A70, 0.5f), &borderBrush);
+    rt->DrawLine(
+        D2D1::Point2F((float)SIDEBAR_W - 1.f, 0),
+        D2D1::Point2F((float)SIDEBAR_W - 1.f, (float)WINDOW_H),
+        borderBrush, 1.f);
+    borderBrush->Release();
 
     // Brand text
     IDWriteTextFormat* brandFmt = nullptr;
@@ -426,59 +465,128 @@ static void DrawSidebar(ID2D1RenderTarget* rt) {
     }
 }
 
+// Draw the custom title bar
+static void DrawTitleBar(ID2D1RenderTarget* rt) {
+    float contentL = (float)SIDEBAR_W;
+    float contentR = (float)WINDOW_W;
+
+    // Title bar background
+    rt->FillRectangle(RectF(contentL, 0, contentR, (float)TITLEBAR_H), g_brushPanel);
+
+    // Bottom border of title bar
+    rt->DrawLine(
+        D2D1::Point2F(contentL, (float)TITLEBAR_H - 1.f),
+        D2D1::Point2F(contentR, (float)TITLEBAR_H - 1.f),
+        g_brushSeparator, 1.f);
+
+    // Title text
+    const wchar_t* pageTitles[] = {
+        L"Uninstall Nirqoba",
+        L"Uninstalling Nirqoba",
+        L"Uninstallation Complete"
+    };
+
+    IDWriteTextFormat* fmt = nullptr;
+    g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL, 15.f, L"en-us", &fmt);
+    if (fmt) {
+        fmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        rt->DrawTextW(pageTitles[(int)g_currentPage],
+            (UINT32)wcslen(pageTitles[(int)g_currentPage]),
+            fmt,
+            RectF(contentL + 24.f, 0, contentR - 120.f, (float)TITLEBAR_H),
+            g_brushTextSec);
+        fmt->Release();
+    }
+
+    // Modern window control buttons: Minimize [-] and Close [X]
+    float btnW = 48.f;
+    float btnH = (float)TITLEBAR_H;
+
+    // Minimize button rect: [contentR - 96, contentR - 48]
+    float minL = contentR - btnW * 2.f;
+    float minR = minL + btnW;
+    if (g_hoverMinBtn) {
+        rt->FillRectangle(RectF(minL, 0, minR, btnH), g_brushSurfaceLight);
+    }
+    ID2D1SolidColorBrush* minGlyphBrush = g_hoverMinBtn ? g_brushWhite : g_brushTextSec;
+    float minMidX = (minL + minR) / 2.f;
+    float minMidY = btnH / 2.f;
+    rt->DrawLine(D2D1::Point2F(minMidX - 7.f, minMidY), D2D1::Point2F(minMidX + 7.f, minMidY), minGlyphBrush, 2.0f);
+
+    // Close button rect: [contentR - 48, contentR]
+    float closeL = contentR - btnW;
+    float closeR = contentR;
+    if (g_hoverCloseBtn) {
+        ID2D1SolidColorBrush* closeHoverBg = nullptr;
+        rt->CreateSolidColorBrush(D2D1::ColorF(0xE81123), &closeHoverBg);
+        rt->FillRectangle(RectF(closeL, 0, closeR, btnH), closeHoverBg);
+        closeHoverBg->Release();
+    }
+    ID2D1SolidColorBrush* closeGlyphBrush = g_hoverCloseBtn ? g_brushWhite : g_brushTextSec;
+    float closeMidX = (closeL + closeR) / 2.f;
+    float closeMidY = btnH / 2.f;
+    float xRadius = 6.f;
+    rt->DrawLine(D2D1::Point2F(closeMidX - xRadius, closeMidY - xRadius),
+                 D2D1::Point2F(closeMidX + xRadius, closeMidY + xRadius), closeGlyphBrush, 2.0f);
+    rt->DrawLine(D2D1::Point2F(closeMidX + xRadius, closeMidY - xRadius),
+                 D2D1::Point2F(closeMidX - xRadius, closeMidY + xRadius), closeGlyphBrush, 2.0f);
+}
+
 static void OnRender() {
     if (FAILED(CreateDeviceResources())) return;
     g_renderTarget->BeginDraw();
     g_renderTarget->Clear(Color::Background);
 
     DrawSidebar(g_renderTarget);
+    DrawTitleBar(g_renderTarget);
 
     float cL = SIDEBAR_W + 48.f;
     float cR = (float)WINDOW_W - 48.f;
-    float cT = 50.f;
+    float cT = (float)TITLEBAR_H + 32.f;
 
-    // Title bar area
     IDWriteTextFormat* titleFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_LIGHT, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 32.f, L"en-us", &titleFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 30.f, L"en-us", &titleFmt);
 
     if (g_currentPage == PAGE_CONFIRM) {
         if (titleFmt) {
             g_renderTarget->DrawTextW(L"Uninstall Nirqoba", 17, titleFmt,
-                RectF(cL, cT, cR, cT + 46.f), g_brushTextPri);
+                RectF(cL, cT, cR, cT + 42.f), g_brushTextPri);
         }
 
         IDWriteTextFormat* subFmt = nullptr;
         g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
             DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL, 15.f, L"en-us", &subFmt);
+            DWRITE_FONT_STRETCH_NORMAL, 14.f, L"en-us", &subFmt);
         if (subFmt) {
             g_renderTarget->DrawTextW(L"Are you sure you want to completely remove Nirqoba?",
-                49, subFmt, RectF(cL, cT + 50.f, cR, cT + 75.f), g_brushTextSec);
+                49, subFmt, RectF(cL, cT + 46.f, cR, cT + 70.f), g_brushTextSec);
             subFmt->Release();
         }
 
-        g_renderTarget->DrawLine(D2D1::Point2F(cL, cT + 86.f), D2D1::Point2F(cR, cT + 86.f), g_brushSeparator, 1.f);
+        g_renderTarget->DrawLine(D2D1::Point2F(cL, cT + 80.f), D2D1::Point2F(cR, cT + 80.f), g_brushSeparator, 1.f);
 
-        float cardT = cT + 110.f;
-        float cardB = cardT + 110.f;
+        float cardT = cT + 98.f;
+        float cardB = cardT + 120.f;
         g_renderTarget->FillRoundedRectangle(RoundedRect(cL, cardT, cR, cardB, 8.f), g_brushSurface);
         g_renderTarget->DrawRoundedRectangle(RoundedRect(cL, cardT, cR, cardB, 8.f), g_brushAccentBorder, 1.f);
 
         IDWriteTextFormat* cardFmt = nullptr;
         g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
             DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL, 14.f, L"en-us", &cardFmt);
+            DWRITE_FONT_STRETCH_NORMAL, 13.5f, L"en-us", &cardFmt);
         if (cardFmt) {
             g_renderTarget->DrawTextW(L"Nirqoba will be uninstalled from the following folder:",
-                52, cardFmt, RectF(cL + 20.f, cardT + 16.f, cR - 20.f, cardT + 40.f), g_brushTextMuted);
+                52, cardFmt, RectF(cL + 20.f, cardT + 16.f, cR - 20.f, cardT + 38.f), g_brushTextMuted);
 
             g_renderTarget->DrawTextW(g_installPath.c_str(), (UINT32)g_installPath.size(), cardFmt,
-                RectF(cL + 20.f, cardT + 46.f, cR - 20.f, cardT + 70.f), g_brushTextPri);
+                RectF(cL + 20.f, cardT + 42.f, cR - 20.f, cardT + 66.f), g_brushTextPri);
 
             g_renderTarget->DrawTextW(L"All binaries, standard libraries, and toolchain links will be removed.",
-                68, cardFmt, RectF(cL + 20.f, cardT + 74.f, cR - 20.f, cardT + 98.f), g_brushDanger);
+                68, cardFmt, RectF(cL + 20.f, cardT + 78.f, cR - 20.f, cardT + 102.f), g_brushDanger);
             cardFmt->Release();
         }
     }
@@ -486,23 +594,23 @@ static void OnRender() {
         if (titleFmt) {
             titleFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
             g_renderTarget->DrawTextW(L"Uninstalling Nirqoba", 20, titleFmt,
-                RectF(cL, cT + 70.f, cR, cT + 120.f), g_brushTextPri);
+                RectF(cL, cT + 50.f, cR, cT + 96.f), g_brushTextPri);
         }
 
         IDWriteTextFormat* statusFmt = nullptr;
         g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
             DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL, 15.f, L"en-us", &statusFmt);
+            DWRITE_FONT_STRETCH_NORMAL, 14.f, L"en-us", &statusFmt);
         if (statusFmt) {
             statusFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
             g_renderTarget->DrawTextW(g_statusText.c_str(), (UINT32)g_statusText.size(), statusFmt,
-                RectF(cL, cT + 130.f, cR, cT + 160.f), g_brushTextSec);
+                RectF(cL, cT + 106.f, cR, cT + 134.f), g_brushTextSec);
             statusFmt->Release();
         }
 
         float barL = cL + 40.f;
         float barR = cR - 40.f;
-        float barT = cT + 180.f;
+        float barT = cT + 154.f;
         float barB = barT + 10.f;
         g_renderTarget->FillRoundedRectangle(RoundedRect(barL, barT, barR, barB, 5.f), g_brushProgressBg);
         float fillW = (barR - barL) * (g_progress / 100.f);
@@ -514,18 +622,18 @@ static void OnRender() {
     }
     else if (g_currentPage == PAGE_COMPLETE) {
         float cx = (cL + cR) / 2.f;
-        float cy = cT + 110.f;
-        g_renderTarget->FillEllipse(Ellipse(cx, cy, 34.f, 34.f), g_brushPanel);
-        g_renderTarget->DrawEllipse(Ellipse(cx, cy, 34.f, 34.f), g_brushSuccess, 2.f);
+        float cy = cT + 80.f;
+        g_renderTarget->FillEllipse(Ellipse(cx, cy, 32.f, 32.f), g_brushPanel);
+        g_renderTarget->DrawEllipse(Ellipse(cx, cy, 32.f, 32.f), g_brushSuccess, 2.f);
 
         ID2D1PathGeometry* checkGeo = nullptr;
         g_d2dFactory->CreatePathGeometry(&checkGeo);
         if (checkGeo) {
             ID2D1GeometrySink* sink = nullptr;
             checkGeo->Open(&sink);
-            sink->BeginFigure(D2D1::Point2F(cx - 12.f, cy), D2D1_FIGURE_BEGIN_HOLLOW);
-            sink->AddLine(D2D1::Point2F(cx - 3.f, cy + 9.f));
-            sink->AddLine(D2D1::Point2F(cx + 14.f, cy - 9.f));
+            sink->BeginFigure(D2D1::Point2F(cx - 11.f, cy), D2D1_FIGURE_BEGIN_HOLLOW);
+            sink->AddLine(D2D1::Point2F(cx - 3.f, cy + 8.f));
+            sink->AddLine(D2D1::Point2F(cx + 13.f, cy - 8.f));
             sink->EndFigure(D2D1_FIGURE_END_OPEN);
             sink->Close();
             sink->Release();
@@ -536,24 +644,24 @@ static void OnRender() {
         if (titleFmt) {
             titleFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
             g_renderTarget->DrawTextW(L"Uninstallation Complete", 23, titleFmt,
-                RectF(cL, cy + 50.f, cR, cy + 95.f), g_brushTextPri);
+                RectF(cL, cy + 46.f, cR, cy + 90.f), g_brushTextPri);
         }
 
         IDWriteTextFormat* subFmt = nullptr;
         g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
             DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL, 15.f, L"en-us", &subFmt);
+            DWRITE_FONT_STRETCH_NORMAL, 14.f, L"en-us", &subFmt);
         if (subFmt) {
             subFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
             g_renderTarget->DrawTextW(L"Nirqoba Compiler Suite has been removed from your computer.",
-                58, subFmt, RectF(cL, cy + 102.f, cR, cy + 130.f), g_brushTextSec);
+                58, subFmt, RectF(cL, cy + 96.f, cR, cy + 124.f), g_brushTextSec);
             subFmt->Release();
         }
     }
     if (titleFmt) titleFmt->Release();
 
     // Button bar background
-    float barY = (float)WINDOW_H - 70.f;
+    float barY = (float)WINDOW_H - 74.f;
     g_renderTarget->FillRectangle(RectF((float)SIDEBAR_W, barY, (float)WINDOW_W, (float)WINDOW_H), g_brushPanel);
     g_renderTarget->DrawLine(D2D1::Point2F((float)SIDEBAR_W, barY), D2D1::Point2F((float)WINDOW_W, barY), g_brushSeparator, 1.f);
 
@@ -583,16 +691,16 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
             CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
 
-        float barY = WINDOW_H - 70.f;
+        float barY = (float)WINDOW_H - 74.f;
         g_hBtnCancel = CreateWindowExW(0, L"BUTTON", L"Cancel",
             WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-            SIDEBAR_W + 28, (int)barY + 12, 100, 44,
-            hWnd, (HMENU)ID_BTN_CANCEL, g_hInst, nullptr);
+            SIDEBAR_W + 32, (int)barY + 15, 108, 44,
+            hWnd, (HMENU)(INT_PTR)ID_BTN_CANCEL, g_hInst, nullptr);
 
         g_hBtnAction = CreateWindowExW(0, L"BUTTON", L"Uninstall",
             WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
-            WINDOW_W - 148, (int)barY + 12, 120, 44,
-            hWnd, (HMENU)ID_BTN_UNINSTALL, g_hInst, nullptr);
+            WINDOW_W - 156, (int)barY + 15, 124, 44,
+            hWnd, (HMENU)(INT_PTR)ID_BTN_UNINSTALL, g_hInst, nullptr);
 
         if (g_hBtnCancel) SendMessageW(g_hBtnCancel, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
         if (g_hBtnAction) SendMessageW(g_hBtnAction, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
@@ -601,29 +709,75 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     }
 
-    case WM_NCCALCSIZE:
-        if (wParam == TRUE) return 0;
-        break;
-
-    case WM_GETMINMAXINFO:
-    {
-        MINMAXINFO* mmi = (MINMAXINFO*)lParam;
-        mmi->ptMinTrackSize.x = WINDOW_W;
-        mmi->ptMinTrackSize.y = WINDOW_H;
-        mmi->ptMaxTrackSize.x = WINDOW_W;
-        mmi->ptMaxTrackSize.y = WINDOW_H;
-        return 0;
-    }
-
     case WM_NCHITTEST:
     {
-        LRESULT res = DefWindowProcW(hWnd, msg, wParam, lParam);
-        if (res == HTCLIENT) {
-            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
-            ScreenToClient(hWnd, &pt);
-            if (pt.y < TITLEBAR_H && pt.x > SIDEBAR_W) return HTCAPTION;
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        ScreenToClient(hWnd, &pt);
+
+        // If mouse is over minimize or close buttons, return HTCLIENT so click & hover work
+        if (pt.y >= 0 && pt.y < TITLEBAR_H && pt.x >= (float)WINDOW_W - 96.f) {
+            return HTCLIENT;
         }
-        return res;
+
+        // Drag along title bar area
+        if (pt.y >= 0 && pt.y < TITLEBAR_H) {
+            return HTCAPTION;
+        }
+
+        return HTCLIENT;
+    }
+
+    case WM_LBUTTONDOWN:
+    {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        float btnW = 48.f;
+        float closeL = (float)WINDOW_W - btnW;
+        float minL   = (float)WINDOW_W - btnW * 2.f;
+
+        if (pt.y >= 0 && pt.y <= TITLEBAR_H) {
+            if (pt.x >= closeL && pt.x <= (float)WINDOW_W) {
+                SendMessageW(hWnd, WM_CLOSE, 0, 0);
+                return 0;
+            }
+            if (pt.x >= minL && pt.x < closeL) {
+                ShowWindow(hWnd, SW_MINIMIZE);
+                return 0;
+            }
+        }
+        break;
+    }
+
+    case WM_MOUSEMOVE:
+    {
+        POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+        float btnW = 48.f;
+        float closeL = (float)WINDOW_W - btnW;
+        float minL   = (float)WINDOW_W - btnW * 2.f;
+
+        bool newHoverClose = (pt.y >= 0 && pt.y <= TITLEBAR_H && pt.x >= closeL && pt.x <= (float)WINDOW_W);
+        bool newHoverMin   = (pt.y >= 0 && pt.y <= TITLEBAR_H && pt.x >= minL && pt.x < closeL);
+
+        if (newHoverClose != g_hoverCloseBtn || newHoverMin != g_hoverMinBtn) {
+            g_hoverCloseBtn = newHoverClose;
+            g_hoverMinBtn = newHoverMin;
+            RECT rcTitle = { (int)minL, 0, (int)WINDOW_W, TITLEBAR_H };
+            InvalidateRect(hWnd, &rcTitle, FALSE);
+        }
+
+        TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hWnd, 0 };
+        TrackMouseEvent(&tme);
+        break;
+    }
+
+    case WM_MOUSELEAVE:
+    {
+        if (g_hoverCloseBtn || g_hoverMinBtn) {
+            g_hoverCloseBtn = false;
+            g_hoverMinBtn = false;
+            RECT rcTitle = { (int)(WINDOW_W - 96), 0, (int)WINDOW_W, TITLEBAR_H };
+            InvalidateRect(hWnd, &rcTitle, FALSE);
+        }
+        break;
     }
 
     case WM_TIMER:
@@ -655,22 +809,34 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     {
         int id = LOWORD(wParam);
         if (id == ID_BTN_CANCEL) {
-            DestroyWindow(hWnd);
+            SendMessageW(hWnd, WM_CLOSE, 0, 0);
         } else if (id == ID_BTN_UNINSTALL) {
             if (g_currentPage == PAGE_CONFIRM) {
                 g_currentPage = PAGE_UNINSTALLING;
                 EnableWindow(g_hBtnAction, FALSE);
-                EnableWindow(g_hBtnCancel, FALSE);
+                ShowWindow(g_hBtnCancel, SW_HIDE);
                 InvalidateRect(hWnd, nullptr, FALSE);
                 CreateThread(nullptr, 0, UninstallWorkerThread, hWnd, 0, nullptr);
             } else if (g_currentPage == PAGE_COMPLETE) {
-                DestroyWindow(hWnd);
+                SendMessageW(hWnd, WM_CLOSE, 0, 0);
             }
         }
         return 0;
     }
 
     case WM_CLOSE:
+        if (g_currentPage == PAGE_UNINSTALLING) {
+            // Cannot abort while uninstallation is actively modifying files
+            return 0;
+        }
+        if (g_currentPage == PAGE_CONFIRM) {
+            if (MessageBoxW(hWnd,
+                L"Are you sure you want to cancel uninstallation?",
+                L"Cancel Uninstallation",
+                MB_YESNO | MB_ICONQUESTION) != IDYES)
+                return 0;
+        }
+        AnimateWindow(hWnd, 140, AW_BLEND | AW_HIDE);
         DestroyWindow(hWnd);
         return 0;
 
@@ -682,6 +848,9 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         EndPaint(hWnd, &ps);
         return 0;
     }
+
+    case WM_ERASEBKGND:
+        return 1;
 
     case WM_DESTROY:
         KillTimer(hWnd, ID_TIMER_ANIM);
@@ -698,6 +867,18 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     g_hInst = hInstance;
+
+    // Check UAC elevation
+    if (!IsElevated()) {
+        if (RelaunchElevated()) return 0;
+        MessageBoxW(nullptr,
+            L"Nirqoba Uninstaller requires administrator privileges to clean toolchains and system PATH.\n\n"
+            L"Please accept the User Account Control prompt to continue.",
+            L"Nirqoba Uninstaller — Administrator Privileges Required",
+            MB_OK | MB_ICONWARNING | MB_TASKMODAL);
+        return 1;
+    }
+
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &g_d2dFactory);
     DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown**)&g_dwFactory);
@@ -717,13 +898,14 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         WS_EX_APPWINDOW,
         L"NirqobaUninstallerWnd",
         L"Nirqoba Uninstaller",
-        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_THICKFRAME | WS_CLIPCHILDREN,
+        WS_POPUP | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
         sx, sy, WINDOW_W, WINDOW_H,
         nullptr, nullptr, hInstance, nullptr);
 
     if (!hWnd) return 1;
-    ShowWindow(hWnd, nCmdShow);
+
     UpdateWindow(hWnd);
+    AnimateWindow(hWnd, 180, AW_BLEND | AW_ACTIVATE);
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0)) {

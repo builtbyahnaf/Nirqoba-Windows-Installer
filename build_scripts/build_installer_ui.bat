@@ -53,13 +53,19 @@ if exist "%ASSETS_DIR%\nirqoba.exe" (
 )
 
 echo [2/5] Compiling and linking uninstaller (uninstall.exe)...
+"%RC_EXE%" /I "%SRC_DIR%" /I "%SDK_INC%\um" /I "%SDK_INC%\shared" /nologo /fo "%OUT_DIR%\uninstall.res" "%SRC_DIR%\uninstall.rc"
+if errorlevel 1 (
+    echo [ERROR] Uninstaller resource compilation failed.
+    exit /b 1
+)
+
 "%CL_EXE%" /nologo /W3 /O2 /Oi /DNDEBUG /DUNICODE /D_UNICODE /utf-8 /EHsc /MD /std:c++17 /I"%MSVC_INC%" /I"%SDK_INC%\ucrt" /I"%SDK_INC%\um" /I"%SDK_INC%\shared" /I"%SDK_INC%\winrt" /Fo"%OUT_DIR%\uninstall.obj" /c "%SRC_DIR%\uninstall_main.cpp"
 if errorlevel 1 (
     echo [ERROR] Uninstaller compilation failed.
     exit /b 1
 )
 
-"%LINK_EXE%" /nologo /OPT:REF /OPT:ICF /SUBSYSTEM:WINDOWS /MACHINE:X64 /LIBPATH:"%MSVC_LIB%" /LIBPATH:"%SDK_LIB%\um\x64" /LIBPATH:"%SDK_LIB%\ucrt\x64" user32.lib gdi32.lib kernel32.lib shell32.lib shlwapi.lib advapi32.lib d2d1.lib dwrite.lib windowscodecs.lib dwmapi.lib ole32.lib uxtheme.lib /OUT:"%PKG_DIR%\uninstall.exe" "%OUT_DIR%\uninstall.obj"
+"%LINK_EXE%" /nologo /OPT:REF /OPT:ICF /SUBSYSTEM:WINDOWS /MACHINE:X64 /LIBPATH:"%MSVC_LIB%" /LIBPATH:"%SDK_LIB%\um\x64" /LIBPATH:"%SDK_LIB%\ucrt\x64" user32.lib gdi32.lib kernel32.lib shell32.lib shlwapi.lib advapi32.lib d2d1.lib dwrite.lib windowscodecs.lib dwmapi.lib ole32.lib uxtheme.lib /OUT:"%PKG_DIR%\uninstall.exe" "%OUT_DIR%\uninstall.obj" "%OUT_DIR%\uninstall.res"
 if errorlevel 1 (
     echo [ERROR] Uninstaller linking failed.
     exit /b 1
