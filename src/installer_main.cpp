@@ -159,8 +159,12 @@ static float         g_animT       = 0.0f;    // animation ticker
 static bool          g_installing  = false;
 static float         g_transitionProgress = 1.f;
 static std::wstring  g_installPath;
-static bool          g_addDesktopShortcut = true;
-static bool          g_addToPath         = true;
+static bool          g_perUserInstall = false; // default unchecked = all users
+static bool          g_addToPath     = true;   // default checked
+static std::wstring  g_statusText = L"Preparing installation...";
+static const UINT    WM_INSTALL_PROGRESS = WM_USER + 20;
+static const UINT    WM_INSTALL_COMPLETE = WM_USER + 21;
+static const UINT    WM_INSTALL_ERROR    = WM_USER + 22;
 static HWND          g_hEditPath  = nullptr;
 static HWND          g_hLicenseText = nullptr;
 static HWND          g_hBtnNext   = nullptr;
@@ -553,17 +557,19 @@ static void DrawSidebar(ID2D1RenderTarget* rt) {
     };
     float stepStartY = 310.f;
     float stepSpacing = 56.f;
+    // Fixed left margin for the step column; circle centre is at paddingL + r
+    const float paddingL = 28.f;
+    const float stepR    = 11.f;   // circle radius
+    const float labelGap = 14.f;   // gap between circle edge and label
 
     for (int i = 0; i < PAGE_COUNT; i++) {
         float stepY = stepStartY + i * stepSpacing;
         bool isActive  = (i == (int)g_currentPage);
         bool isDone    = (i < (int)g_currentPage);
-        bool isFuture  = (i > (int)g_currentPage);
 
-        // Step circle
-        float cx = 42.f;
-        float cy2 = stepY + 8.f;
-        float r   = 11.f;
+        // Circle centre: horizontally fixed, vertically centred in the step row
+        float cx  = paddingL + stepR;          // 39 px from left edge
+        float cy2 = stepY + stepSpacing * 0.5f - 4.f;  // vertically centred
 
         ID2D1SolidColorBrush* circleFill   = nullptr;
         ID2D1SolidColorBrush* circleStroke = nullptr;
@@ -579,19 +585,17 @@ static void DrawSidebar(ID2D1RenderTarget* rt) {
             rt->CreateSolidColorBrush(D2D1::ColorF(0x2A3B55, 1.0f), &circleStroke);
         }
 
-        rt->FillEllipse(Ellipse(cx, cy2, r, r), circleFill);
-        rt->DrawEllipse(Ellipse(cx, cy2, r, r), circleStroke, 1.5f);
+        rt->FillEllipse(Ellipse(cx, cy2, stepR, stepR), circleFill);
+        rt->DrawEllipse(Ellipse(cx, cy2, stepR, stepR), circleStroke, 1.5f);
 
         // Checkmark or number in circle
         if (isDone) {
-            // Draw checkmark
             ID2D1SolidColorBrush* chkBrush = nullptr;
             rt->CreateSolidColorBrush(Color::White, &chkBrush);
-            rt->DrawLine(D2D1::Point2F(cx-3.f, cy2),   D2D1::Point2F(cx-0.5f, cy2+3.f), chkBrush, 1.5f);
-            rt->DrawLine(D2D1::Point2F(cx-0.5f, cy2+3.f), D2D1::Point2F(cx+4.f, cy2-3.f), chkBrush, 1.5f);
+            rt->DrawLine(D2D1::Point2F(cx-3.5f, cy2+0.5f), D2D1::Point2F(cx-0.5f, cy2+3.5f), chkBrush, 1.5f);
+            rt->DrawLine(D2D1::Point2F(cx-0.5f, cy2+3.5f), D2D1::Point2F(cx+4.5f, cy2-3.f),  chkBrush, 1.5f);
             chkBrush->Release();
         } else {
-            // Draw step number
             wchar_t numStr[4];
             swprintf_s(numStr, L"%d", i + 1);
             IDWriteTextFormat* numFmt = nullptr;
@@ -603,12 +607,13 @@ static void DrawSidebar(ID2D1RenderTarget* rt) {
                 numFmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
                 auto numColor = isActive ? g_brushWhite : g_brushTextMuted;
                 rt->DrawTextW(numStr, (UINT32)wcslen(numStr), numFmt,
-                    RectF(cx-r, cy2-r, cx+r, cy2+r), numColor);
+                    RectF(cx - stepR, cy2 - stepR, cx + stepR, cy2 + stepR), numColor);
                 numFmt->Release();
             }
         }
 
-        // Step label
+        // Step label — starts just right of the circle, vertically aligned to its centre
+        float labelL = cx + stepR + labelGap;
         IDWriteTextFormat* lFmt = nullptr;
         g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
             isActive ? DWRITE_FONT_WEIGHT_SEMI_BOLD : DWRITE_FONT_WEIGHT_NORMAL,
@@ -618,19 +623,18 @@ static void DrawSidebar(ID2D1RenderTarget* rt) {
             lFmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
             auto lColor = isActive ? g_brushTextPri : (isDone ? g_brushSuccess : g_brushTextMuted);
             rt->DrawTextW(stepNames[i], (UINT32)wcslen(stepNames[i]), lFmt,
-                RectF(cx + r + 12.f, stepY, SIDEBAR_W - 18.f, stepY + 28.f),
+                RectF(labelL, cy2 - stepR, (float)SIDEBAR_W - 12.f, cy2 + stepR),
                 lColor);
             lFmt->Release();
         }
 
-        // Connector line between steps
+        // Connector line between steps (runs along the circle column)
         if (i < PAGE_COUNT - 1) {
-            float lineX = cx;
-            float lineTop = stepY + 8.f + r + 2.f;
-            float lineBot = stepY + stepSpacing - r - 2.f + 8.f;
+            float lineTop = cy2 + stepR + 3.f;
+            float lineBot = (stepStartY + (i + 1) * stepSpacing) + (stepSpacing * 0.5f - 4.f) - stepR - 3.f;
             ID2D1SolidColorBrush* lineBrush = nullptr;
             rt->CreateSolidColorBrush(isDone ? D2D1::ColorF(0x2A5A38, 0.8f) : D2D1::ColorF(0x1A2B40, 1.f), &lineBrush);
-            rt->DrawLine(D2D1::Point2F(lineX, lineTop), D2D1::Point2F(lineX, lineBot), lineBrush, 1.f);
+            rt->DrawLine(D2D1::Point2F(cx, lineTop), D2D1::Point2F(cx, lineBot), lineBrush, 1.f);
             lineBrush->Release();
         }
 
@@ -863,11 +867,6 @@ static void DrawOptionCard(
         if (borderBrush) borderBrush->Release();
     }
 
-    // Left Active Pill Indicator
-    if (isChecked) {
-        rt->FillRoundedRectangle(RoundedRect(l, t + 14.f, l + 4.f, b - 14.f, 2.f), g_brushAccent);
-    }
-
     // 2. Icon Tile (Left side)
     float iconBoxL = l + 22.f;
     float iconBoxT = cy - 22.f;
@@ -900,14 +899,10 @@ static void DrawOptionCard(
         rt->DrawLine(D2D1::Point2F(iconCx - 1.f, cy), D2D1::Point2F(iconCx - 7.f, cy + 6.f), promptBrush, 2.2f);
         rt->DrawLine(D2D1::Point2F(iconCx + 2.f, cy + 6.f), D2D1::Point2F(iconCx + 9.f, cy + 6.f), cursorBrush, 2.2f);
     } else {
-        // Desktop Shortcut: Display with stand and Nirqoba diamond
-        ID2D1SolidColorBrush* frameBrush = isChecked ? g_brushLavender : g_brushBlue1;
-        ID2D1SolidColorBrush* baseBrush = isChecked ? g_brushAccent : g_brushTextSec;
-
-        rt->DrawRoundedRectangle(RoundedRect(iconCx - 11.f, cy - 9.f, iconCx + 11.f, cy + 5.f, 2.5f), frameBrush, 1.8f);
-        rt->DrawLine(D2D1::Point2F(iconCx, cy + 5.f), D2D1::Point2F(iconCx, cy + 9.f), baseBrush, 1.8f);
-        rt->DrawLine(D2D1::Point2F(iconCx - 6.f, cy + 9.f), D2D1::Point2F(iconCx + 6.f, cy + 9.f), baseBrush, 1.8f);
-        rt->FillEllipse(Ellipse(iconCx, cy - 2.f, 2.5f, 2.5f), isChecked ? g_brushWhite : g_brushAccent);
+        // Per-User Profile Icon (Head + Shoulders)
+        ID2D1SolidColorBrush* userBrush = isChecked ? g_brushLavender : g_brushBlue1;
+        rt->FillEllipse(Ellipse(iconCx, cy - 7.f, 6.5f, 6.5f), userBrush);
+        rt->FillRoundedRectangle(RoundedRect(iconCx - 13.f, cy + 2.f, iconCx + 13.f, cy + 12.f, 5.f), userBrush);
     }
 
     // 3. Typography & Badge
@@ -1083,10 +1078,10 @@ static void DrawPageOptions(ID2D1RenderTarget* rt) {
         L"Enables running 'nirqoba' directly from Command Prompt, PowerShell, or Windows Terminal",
         L"RECOMMENDED", 0);
 
-    DrawOptionCard(rt, 2, g_addDesktopShortcut, (g_hoverOptCard == 2),
-        L"Create Desktop Shortcut",
-        L"Place a Nirqoba shortcut on your desktop for quick terminal and toolchain access",
-        nullptr, 1);
+    DrawOptionCard(rt, 2, g_perUserInstall, (g_hoverOptCard == 2),
+        L"Install for current user only",
+        L"Installs to %LOCALAPPDATA%\\Programs\\Nirqoba instead of system-wide Program Files",
+        g_perUserInstall ? L"PER-USER" : nullptr, 1);
 }
 
 static void DrawPageInstalling(ID2D1RenderTarget* rt) {
@@ -1110,25 +1105,16 @@ static void DrawPageInstalling(ID2D1RenderTarget* rt) {
         titleFmt->Release();
     }
 
-    // Status text (animated dots)
+    // Status text
     int dotCount = ((int)(g_animT * 1.5f)) % 4;
-    wchar_t statusText[128];
-    const wchar_t* steps[] = {
-        L"Copying compiler binaries",
-        L"Installing runtime library",
-        L"Registering toolchain",
-        L"Configuring environment",
-        L"Finalizing installation"
-    };
-    int stepIdx = (int)(g_progress * 5.f);
-    if (stepIdx >= 5) stepIdx = 4;
-    swprintf_s(statusText, L"%ls%ls", steps[stepIdx],
+    wchar_t statusText[256];
+    swprintf_s(statusText, L"%ls%ls", g_statusText.c_str(),
         dotCount == 0 ? L"." : dotCount == 1 ? L".." : dotCount == 2 ? L"..." : L"");
 
     IDWriteTextFormat* statusFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 18.f, L"en-us", &statusFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 17.f, L"en-us", &statusFmt);
     if (statusFmt) {
         statusFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         rt->DrawTextW(statusText, (UINT32)wcslen(statusText), statusFmt,
@@ -1246,41 +1232,18 @@ static void DrawPageFinish(ID2D1RenderTarget* rt) {
         subFmt->Release();
     }
 
-    // Info card
-    float infoT = checkCy + checkR + 116.f;
-    rt->FillRoundedRectangle(RoundedRect(cL, infoT, cR, infoT + 102.f, 10.f), g_brushSurface);
-    ID2D1SolidColorBrush* infoAccent = nullptr;
-    rt->CreateSolidColorBrush(Color::Success, &infoAccent);
-    rt->FillRoundedRectangle(RoundedRect(cL, infoT, cL + 5.f, infoT + 102.f, 3.f), infoAccent);
-    infoAccent->Release();
-
-    IDWriteTextFormat* infoFmt = nullptr;
+    IDWriteTextFormat* cmdFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 18.f, L"en-us", &infoFmt);
-    if (infoFmt) {
-        rt->DrawTextW(L"Installed to:", 13, infoFmt,
-            RectF(cL + 24.f, infoT + 12.f, cR - 16.f, infoT + 38.f), g_brushTextMuted);
-
-        IDWriteTextFormat* pathFmt = nullptr;
-        g_dwFactory->CreateTextFormat(L"Cascadia Mono", nullptr,
-            DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-            DWRITE_FONT_STRETCH_NORMAL, 17.f, L"en-us", &pathFmt);
-        if (!pathFmt) {
-            g_dwFactory->CreateTextFormat(L"Consolas", nullptr,
-                DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-                DWRITE_FONT_STRETCH_NORMAL, 17.f, L"en-us", &pathFmt);
-        }
-        if (pathFmt) {
-            rt->DrawTextW(g_installPath.c_str(), (UINT32)g_installPath.size(), pathFmt,
-                RectF(cL + 24.f, infoT + 40.f, cR - 16.f, infoT + 66.f), g_brushAccent);
-            pathFmt->Release();
-        }
-
-        rt->DrawTextW(L"Run  nirqoba --help  to get started.",
-            36, infoFmt,
-            RectF(cL + 24.f, infoT + 70.f, cR - 16.f, infoT + 96.f), g_brushTextSec);
-        infoFmt->Release();
+        DWRITE_FONT_STRETCH_NORMAL, 22.f, L"en-us", &cmdFmt);
+    if (cmdFmt) {
+        cmdFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+        rt->DrawTextW(
+            L"Run  nirqoba --help  to get started.",
+            36, cmdFmt,
+            RectF(cL, checkCy + checkR + 116.f, cR, checkCy + checkR + 152.f),
+            g_brushTextMuted);
+        cmdFmt->Release();
     }
 }
 
@@ -1390,6 +1353,193 @@ static void UpdateNativeControls() {
     }
 }
 
+static bool AddToPathSafely(const std::wstring& dirToAdd, bool perUser) {
+    HKEY hRoot = perUser ? HKEY_CURRENT_USER : HKEY_LOCAL_MACHINE;
+    const wchar_t* subKey = perUser
+        ? L"Environment"
+        : L"SYSTEM\\CurrentControlSet\\Control\\Session Manager\\Environment";
+
+    HKEY hKey = nullptr;
+    if (RegOpenKeyExW(hRoot, subKey, 0, KEY_READ | KEY_WRITE, &hKey) != ERROR_SUCCESS)
+        return false;
+
+    std::wstring normAdd = dirToAdd;
+    while (!normAdd.empty() && (normAdd.back() == L'\\' || normAdd.back() == L'/'))
+        normAdd.pop_back();
+
+    DWORD type = REG_EXPAND_SZ;
+    DWORD cbData = 0;
+    LSTATUS status = RegQueryValueExW(hKey, L"Path", nullptr, &type, nullptr, &cbData);
+    if (status != ERROR_SUCCESS) {
+        status = RegQueryValueExW(hKey, L"PATH", nullptr, &type, nullptr, &cbData);
+    }
+
+    std::wstring currentPath;
+    if (status == ERROR_SUCCESS && cbData > 0) {
+        std::vector<wchar_t> buffer(cbData / sizeof(wchar_t) + 2, 0);
+        RegQueryValueExW(hKey, L"Path", nullptr, &type, (LPBYTE)buffer.data(), &cbData);
+        currentPath = buffer.data();
+    }
+
+    bool alreadyExists = false;
+    size_t start = 0;
+    while (start < currentPath.size()) {
+        size_t end = currentPath.find(L';', start);
+        if (end == std::wstring::npos) end = currentPath.size();
+        std::wstring part = currentPath.substr(start, end - start);
+        while (!part.empty() && part.front() == L' ') part.erase(0, 1);
+        while (!part.empty() && (part.back() == L' ' || part.back() == L'\\' || part.back() == L'/'))
+            part.pop_back();
+
+        if (_wcsicmp(part.c_str(), normAdd.c_str()) == 0) {
+            alreadyExists = true;
+            break;
+        }
+        start = end + 1;
+    }
+
+    if (!alreadyExists) {
+        std::wstring newPath = currentPath;
+        if (!newPath.empty() && newPath.back() != L';') {
+            newPath += L';';
+        }
+        newPath += normAdd;
+
+        DWORD writeType = (type == REG_SZ) ? REG_SZ : REG_EXPAND_SZ;
+        RegSetValueExW(hKey, L"Path", 0, writeType,
+            (const BYTE*)newPath.c_str(),
+            (DWORD)((newPath.size() + 1) * sizeof(wchar_t)));
+    }
+
+    RegCloseKey(hKey);
+
+    DWORD_PTR dwResult = 0;
+    SendMessageTimeoutW(
+        HWND_BROADCAST,
+        WM_SETTINGCHANGE,
+        0,
+        (LPARAM)L"Environment",
+        SMTO_ABORTIFHUNG,
+        5000,
+        &dwResult);
+
+    return true;
+}
+
+static DWORD WINAPI InstallWorkerThread(LPVOID lpParam) {
+    HWND hWnd = (HWND)lpParam;
+    Sleep(250);
+
+    HRSRC hRes = FindResourceW(g_hInst, MAKEINTRESOURCEW(100), RT_RCDATA);
+    if (!hRes) {
+        PostMessageW(hWnd, WM_INSTALL_ERROR, 0, (LPARAM)L"Could not locate payload resource in installer binary.");
+        return 1;
+    }
+
+    HGLOBAL hGlobal = LoadResource(g_hInst, hRes);
+    DWORD dataSize = SizeofResource(g_hInst, hRes);
+    const BYTE* pData = (const BYTE*)LockResource(hGlobal);
+
+    if (dataSize < 8 || memcmp(pData, "NRQB", 4) != 0) {
+        PostMessageW(hWnd, WM_INSTALL_ERROR, 0, (LPARAM)L"Corrupt or invalid installer payload data.");
+        return 1;
+    }
+
+    uint32_t fileCount = *(const uint32_t*)(pData + 4);
+    const BYTE* ptr = pData + 8;
+    const BYTE* endPtr = pData + dataSize;
+
+    // Ensure target install directory exists
+    SHCreateDirectoryExW(nullptr, g_installPath.c_str(), nullptr);
+
+    // Extract files
+    for (uint32_t i = 0; i < fileCount && ptr < endPtr; ++i) {
+        uint16_t pathLen = *(const uint16_t*)ptr;
+        ptr += 2;
+        std::string relUtf8((const char*)ptr, pathLen);
+        ptr += pathLen;
+        uint32_t fileSize = *(const uint32_t*)ptr;
+        ptr += 4;
+        const BYTE* fileBytes = ptr;
+        ptr += fileSize;
+
+        int wlen = MultiByteToWideChar(CP_UTF8, 0, relUtf8.c_str(), (int)relUtf8.size(), nullptr, 0);
+        std::wstring relW(wlen, 0);
+        MultiByteToWideChar(CP_UTF8, 0, relUtf8.c_str(), (int)relUtf8.size(), &relW[0], wlen);
+
+        int pct = (int)((float)i / (float)fileCount * 80.f);
+        static wchar_t s_statusBuf[256];
+        swprintf_s(s_statusBuf, L"Extracting %ls", relW.c_str());
+        SendMessageW(hWnd, WM_INSTALL_PROGRESS, (WPARAM)pct, (LPARAM)s_statusBuf);
+
+        std::wstring destFile = g_installPath + L"\\" + relW;
+        wchar_t parentDir[MAX_PATH];
+        wcscpy_s(parentDir, destFile.c_str());
+        PathRemoveFileSpecW(parentDir);
+        SHCreateDirectoryExW(nullptr, parentDir, nullptr);
+
+        HANDLE hOut = CreateFileW(destFile.c_str(), GENERIC_WRITE, 0, nullptr,
+            CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+        if (hOut != INVALID_HANDLE_VALUE) {
+            DWORD written = 0;
+            WriteFile(hOut, fileBytes, fileSize, &written, nullptr);
+            CloseHandle(hOut);
+        }
+    }
+
+    // Configure PATH
+    if (g_addToPath) {
+        static const wchar_t* pathStatus = L"Adding Nirqoba to environment PATH...";
+        SendMessageW(hWnd, WM_INSTALL_PROGRESS, 86, (LPARAM)pathStatus);
+        std::wstring binDir = g_installPath + L"\\bin";
+        AddToPathSafely(binDir, g_perUserInstall);
+    }
+
+    // Register Uninstaller in Windows Registry
+    {
+        static const wchar_t* regStatus = L"Registering system uninstaller...";
+        SendMessageW(hWnd, WM_INSTALL_PROGRESS, 94, (LPARAM)regStatus);
+
+        HKEY hRoot = g_perUserInstall ? HKEY_CURRENT_USER : HKEY_LOCAL_MACHINE;
+        const wchar_t* unKey = g_perUserInstall
+            ? L"Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Nirqoba"
+            : L"SOFTWARE\\Microsoft\\Windows\\CurrentVersion\\Uninstall\\Nirqoba";
+
+        HKEY hKey = nullptr;
+        if (RegCreateKeyExW(hRoot, unKey, 0, nullptr, REG_OPTION_NON_VOLATILE,
+            KEY_WRITE, nullptr, &hKey, nullptr) == ERROR_SUCCESS)
+        {
+            const wchar_t* dName = L"Nirqoba Compiler Suite";
+            RegSetValueExW(hKey, L"DisplayName", 0, REG_SZ, (const BYTE*)dName, (DWORD)((wcslen(dName) + 1) * sizeof(wchar_t)));
+            const wchar_t* dVer = L"1.0.0";
+            RegSetValueExW(hKey, L"DisplayVersion", 0, REG_SZ, (const BYTE*)dVer, (DWORD)((wcslen(dVer) + 1) * sizeof(wchar_t)));
+            const wchar_t* dPub = L"Muhammad Tahmid Ahnaf";
+            RegSetValueExW(hKey, L"Publisher", 0, REG_SZ, (const BYTE*)dPub, (DWORD)((wcslen(dPub) + 1) * sizeof(wchar_t)));
+
+            std::wstring dIcon = g_installPath + L"\\bin\\nirqoba.exe,0";
+            RegSetValueExW(hKey, L"DisplayIcon", 0, REG_SZ, (const BYTE*)dIcon.c_str(), (DWORD)((dIcon.size() + 1) * sizeof(wchar_t)));
+            RegSetValueExW(hKey, L"InstallLocation", 0, REG_SZ, (const BYTE*)g_installPath.c_str(), (DWORD)((g_installPath.size() + 1) * sizeof(wchar_t)));
+
+            std::wstring unStr = L"\"" + g_installPath + L"\\uninstall.exe\"";
+            RegSetValueExW(hKey, L"UninstallString", 0, REG_SZ, (const BYTE*)unStr.c_str(), (DWORD)((unStr.size() + 1) * sizeof(wchar_t)));
+
+            DWORD dOne = 1;
+            RegSetValueExW(hKey, L"NoModify", 0, REG_DWORD, (const BYTE*)&dOne, sizeof(dOne));
+            RegSetValueExW(hKey, L"NoRepair", 0, REG_DWORD, (const BYTE*)&dOne, sizeof(dOne));
+
+            DWORD estSize = 32500;
+            RegSetValueExW(hKey, L"EstimatedSize", 0, REG_DWORD, (const BYTE*)&estSize, sizeof(estSize));
+
+            RegCloseKey(hKey);
+        }
+    }
+
+    SendMessageW(hWnd, WM_INSTALL_PROGRESS, 100, (LPARAM)L"Installation completed successfully!");
+    Sleep(300);
+    PostMessageW(hWnd, WM_INSTALL_COMPLETE, 0, 0);
+    return 0;
+}
+
 // ---------------------------------------------------------------------------
 // Page transitions
 // ---------------------------------------------------------------------------
@@ -1399,15 +1549,18 @@ static void GoNextPage() {
         if (g_hEditPath) {
             wchar_t buf[MAX_PATH] = {0};
             GetWindowTextW(g_hEditPath, buf, MAX_PATH);
-            g_installPath = buf;
+            std::wstring s = buf;
+            while (!s.empty() && (s.back() == L' ' || s.back() == L'\\' || s.back() == L'/')) s.pop_back();
+            if (!s.empty()) g_installPath = s;
         }
-        // Start installation
+        // Start real installation in worker thread
         g_currentPage = PAGE_INSTALLING;
         g_progress    = 0.f;
         g_installing  = true;
-        SetTimer(g_hWnd, ID_TIMER_PROGRESS, 60, nullptr);
+        g_statusText  = L"Preparing installation...";
+        CreateThread(nullptr, 0, InstallWorkerThread, g_hWnd, 0, nullptr);
     } else if (g_currentPage == PAGE_FINISH) {
-        PostQuitMessage(0);
+        DestroyWindow(g_hWnd);
     } else if (g_currentPage < PAGE_OPTIONS) {
         g_currentPage = (InstallerPage)((int)g_currentPage + 1);
     }
@@ -1621,6 +1774,20 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         return 0;
     }
 
+    case WM_NCCALCSIZE:
+        if (wParam == TRUE) return 0;
+        break;
+
+    case WM_GETMINMAXINFO:
+    {
+        MINMAXINFO* mmi = (MINMAXINFO*)lParam;
+        mmi->ptMinTrackSize.x = WINDOW_W;
+        mmi->ptMinTrackSize.y = WINDOW_H;
+        mmi->ptMaxTrackSize.x = WINDOW_W;
+        mmi->ptMaxTrackSize.y = WINDOW_H;
+        return 0;
+    }
+
     case WM_TIMER:
         if (wParam == ID_TIMER_TRANSITION) {
             g_transitionProgress = std::min(1.f, g_transitionProgress + 0.10f);
@@ -1637,23 +1804,30 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
             if (g_currentPage == PAGE_INSTALLING) {
                 InvalidateRect(hWnd, nullptr, FALSE);
             }
-        } else if (wParam == ID_TIMER_PROGRESS) {
-            g_progress += 0.008f;
-            if (g_progress >= 1.0f) {
-                g_progress = 1.0f;
-                g_installing = false;
-                KillTimer(hWnd, ID_TIMER_PROGRESS);
-                // Auto-advance to finish after short delay
-                SetTimer(hWnd, 300, 600, nullptr);
-            }
-            InvalidateRect(hWnd, nullptr, FALSE);
-        } else if (wParam == 300) {
-            KillTimer(hWnd, 300);
-            g_currentPage = PAGE_FINISH;
-            StartPageTransition();
-            UpdateNativeControls();
-            InvalidateRect(hWnd, nullptr, FALSE);
         }
+        return 0;
+
+    case WM_INSTALL_PROGRESS:
+        g_progress = (float)wParam / 100.f;
+        if (lParam) g_statusText = (const wchar_t*)lParam;
+        InvalidateRect(hWnd, nullptr, FALSE);
+        return 0;
+
+    case WM_INSTALL_COMPLETE:
+        g_progress = 1.0f;
+        g_installing = false;
+        g_currentPage = PAGE_FINISH;
+        StartPageTransition();
+        UpdateNativeControls();
+        InvalidateRect(hWnd, nullptr, FALSE);
+        return 0;
+
+    case WM_INSTALL_ERROR:
+        g_installing = false;
+        MessageBoxW(hWnd, (const wchar_t*)lParam, L"Installation Error", MB_OK | MB_ICONERROR);
+        g_currentPage = PAGE_OPTIONS;
+        UpdateNativeControls();
+        InvalidateRect(hWnd, nullptr, FALSE);
         return 0;
 
     case WM_PAINT:
@@ -1727,21 +1901,12 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         if (result == HTCLIENT) {
             POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
             ScreenToClient(hWnd, &pt);
-            // Drag from title bar area (top portion of content area)
-            if (pt.x > SIDEBAR_W && pt.y < TITLEBAR_H) {
-                // Check if not on close/minimize buttons
+            // Drag from title bar area
+            if (pt.y < TITLEBAR_H && pt.x > SIDEBAR_W) {
                 float btnSize = TITLEBAR_H * 0.6f;
                 if (pt.x < WINDOW_W - btnSize * 2 - 16)
                     return HTCAPTION;
             }
-            // Resize edges
-            RECT rc;
-            GetClientRect(hWnd, &rc);
-            int edge = 4;
-            if (pt.x < edge) return (pt.y < edge) ? HTTOPLEFT : (pt.y > rc.bottom - edge) ? HTBOTTOMLEFT : HTLEFT;
-            if (pt.x > rc.right - edge) return (pt.y < edge) ? HTTOPRIGHT : (pt.y > rc.bottom - edge) ? HTBOTTOMRIGHT : HTRIGHT;
-            if (pt.y < edge) return HTTOP;
-            if (pt.y > rc.bottom - edge) return HTBOTTOM;
         }
         return result;
     }
@@ -1764,7 +1929,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 
         if (pt.y >= btnY && pt.y <= btnY + btnSize && pt.x > SIDEBAR_W) {
             if (pt.x >= closeX && pt.x <= closeX + btnSize) {
-                PostQuitMessage(0);
+                DestroyWindow(hWnd);
                 return 0;
             }
             if (pt.x >= minX && pt.x <= minX + btnSize) {
@@ -1784,7 +1949,27 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
             if (pt.x >= l2 && pt.x <= r2 && pt.y >= t2 && pt.y <= b2) {
-                g_addDesktopShortcut = !g_addDesktopShortcut;
+                g_perUserInstall = !g_perUserInstall;
+                wchar_t pfDir[MAX_PATH], laDir[MAX_PATH];
+                SHGetSpecialFolderPathW(hWnd, pfDir, CSIDL_PROGRAM_FILES, FALSE);
+                SHGetSpecialFolderPathW(hWnd, laDir, CSIDL_LOCAL_APPDATA, FALSE);
+                std::wstring defaultAll = std::wstring(pfDir) + L"\\Nirqoba";
+                std::wstring defaultUser = std::wstring(laDir) + L"\\Programs\\Nirqoba";
+
+                wchar_t current[MAX_PATH] = { 0 };
+                if (g_hEditPath) GetWindowTextW(g_hEditPath, current, MAX_PATH);
+
+                if (g_perUserInstall) {
+                    if (_wcsicmp(current, defaultAll.c_str()) == 0) {
+                        SetWindowTextW(g_hEditPath, defaultUser.c_str());
+                        g_installPath = defaultUser;
+                    }
+                } else {
+                    if (_wcsicmp(current, defaultUser.c_str()) == 0) {
+                        SetWindowTextW(g_hEditPath, defaultAll.c_str());
+                        g_installPath = defaultAll;
+                    }
+                }
                 InvalidateRect(hWnd, nullptr, FALSE);
                 return 0;
             }
@@ -1844,13 +2029,13 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         case ID_BTN_BACK:   GoPrevPage();  break;
         case ID_BTN_CANCEL:
             if (g_currentPage == PAGE_FINISH)
-                PostQuitMessage(0);
+                DestroyWindow(hWnd);
             else {
                 if (MessageBoxW(hWnd,
                     L"Are you sure you want to cancel the installation?",
                     L"Cancel Installation",
                     MB_YESNO | MB_ICONQUESTION) == IDYES)
-                    PostQuitMessage(1);
+                    DestroyWindow(hWnd);
             }
             break;
         case ID_BTN_BROWSE:
@@ -1866,6 +2051,7 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 if (SHGetPathFromIDListW(pidl, path)) {
                     std::wstring fullPath = std::wstring(path) + L"\\Nirqoba";
                     if (g_hEditPath) SetWindowTextW(g_hEditPath, fullPath.c_str());
+                    g_installPath = fullPath;
                 }
                 CoTaskMemFree(pidl);
             }
@@ -1874,6 +2060,23 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         }
         return 0;
     }
+
+    case WM_CLOSE:
+        if (g_currentPage == PAGE_INSTALLING) {
+            if (MessageBoxW(hWnd,
+                L"Installation is currently in progress. Are you sure you want to cancel?",
+                L"Cancel Installation",
+                MB_YESNO | MB_ICONQUESTION) != IDYES)
+                return 0;
+        } else if (g_currentPage != PAGE_FINISH) {
+            if (MessageBoxW(hWnd,
+                L"Are you sure you want to cancel the installation?",
+                L"Cancel Installation",
+                MB_YESNO | MB_ICONQUESTION) != IDYES)
+                return 0;
+        }
+        DestroyWindow(hWnd);
+        return 0;
 
     case WM_ERASEBKGND:
         return 1; // prevent flicker
@@ -1897,10 +2100,71 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
 }
 
 // ---------------------------------------------------------------------------
+// UAC elevation helpers
+// ---------------------------------------------------------------------------
+
+// Returns true if the current process is running with administrator privileges.
+static bool IsElevated() {
+    BOOL elevated = FALSE;
+    HANDLE token  = nullptr;
+    if (OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &token)) {
+        TOKEN_ELEVATION elev = {};
+        DWORD cbSize = sizeof(elev);
+        if (GetTokenInformation(token, TokenElevation, &elev, cbSize, &cbSize))
+            elevated = elev.TokenIsElevated;
+        CloseHandle(token);
+    }
+    return elevated != FALSE;
+}
+
+// Re-launch the same executable elevated. Returns true if the ShellExecute
+// succeeded (the new elevated instance is starting). The caller should exit.
+static bool RelaunchElevated() {
+    wchar_t exePath[MAX_PATH];
+    GetModuleFileNameW(nullptr, exePath, MAX_PATH);
+
+    SHELLEXECUTEINFOW sei = {};
+    sei.cbSize       = sizeof(sei);
+    sei.lpVerb       = L"runas";
+    sei.lpFile       = exePath;
+    sei.nShow        = SW_NORMAL;
+    sei.fMask        = SEE_MASK_NOASYNC;
+    return ShellExecuteExW(&sei) != FALSE;
+}
+
+// Show a custom on-brand "needs admin" dialog when the user denies UAC.
+static void ShowElevationDeniedDialog() {
+    // We need a temporary window as a parent so the MessageBox is not orphaned.
+    // Use a simple MessageBox styled to match the situation — the custom D2D
+    // window hasn't been created yet at this stage.
+    MessageBoxW(
+        nullptr,
+        L"Nirqoba Setup requires administrator privileges to install system-wide components, "
+        L"register the toolchain, and add Nirqoba to the system PATH.\n\n"
+        L"Please re-run the installer and accept the User Account Control prompt to continue.",
+        L"Nirqoba Setup — Administrator Privileges Required",
+        MB_OK | MB_ICONWARNING | MB_TASKMODAL);
+}
+
+// ---------------------------------------------------------------------------
 // Entry point
 // ---------------------------------------------------------------------------
 int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     g_hInst = hInstance;
+
+    // -----------------------------------------------------------------------
+    // UAC elevation: require admin privileges before showing any UI.
+    // -----------------------------------------------------------------------
+    if (!IsElevated()) {
+        // Attempt to re-launch with elevated privileges.
+        if (RelaunchElevated()) {
+            // The elevated instance is spinning up — exit this non-elevated one.
+            return 0;
+        }
+        // User denied or UAC is unavailable — show the branded denial dialog.
+        ShowElevationDeniedDialog();
+        return 1;
+    }
 
     // Initialize COM
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
@@ -1940,12 +2204,12 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     int winX    = (screenW - WINDOW_W) / 2;
     int winY    = (screenH - WINDOW_H) / 2;
 
-    // Create borderless window with drop shadow
+    // Create borderless window with drop shadow and native DWM open/close animation
     HWND hWnd = CreateWindowExW(
         WS_EX_APPWINDOW,
         L"NirqobaInstallerWnd",
         L"Nirqoba Setup",
-        WS_POPUP | WS_MINIMIZEBOX | WS_CLIPCHILDREN,
+        WS_OVERLAPPED | WS_CAPTION | WS_SYSMENU | WS_MINIMIZEBOX | WS_THICKFRAME | WS_CLIPCHILDREN,
         winX, winY, WINDOW_W, WINDOW_H,
         nullptr, nullptr, hInstance, nullptr);
 

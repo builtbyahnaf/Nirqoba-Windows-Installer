@@ -1,10 +1,17 @@
 // Resource file for Nirqoba Installer
-// Defines the application icon
+// Defines the application icon and UAC manifest
 
 #include <windows.h>
 
 // Application icon
 1 ICON "nirqoba_installer.ico"
+
+// UAC Manifest — requests admin elevation on launch
+// (requestedExecutionLevel = requireAdministrator)
+1 RT_MANIFEST "installer.manifest"
+
+// Installer payload archive
+100 RCDATA "payload.bin"
 
 // Version info
 VS_VERSION_INFO VERSIONINFO
