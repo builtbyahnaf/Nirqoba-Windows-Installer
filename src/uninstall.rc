@@ -6,3 +6,6 @@
 
 // UAC Manifest — requests admin elevation if needed
 1 RT_MANIFEST "installer.manifest"
+
+// Embedded Nirqoba logo PNG (loaded via WIC from resource memory)
+2 RCDATA "Nirqoba logo.png"

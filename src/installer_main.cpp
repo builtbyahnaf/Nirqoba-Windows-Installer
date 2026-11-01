@@ -1719,6 +1719,13 @@ static void DrawStyledButton(const DRAWITEMSTRUCT* item) {
 
     HBRUSH fill = CreateSolidBrush(fillColor);
     HPEN border = CreatePen(PS_SOLID, 1, borderColor);
+
+    // Erase button rect with matching background first to prevent white GDI RoundRect corner artifacts
+    COLORREF bgCol = (item->CtlID == ID_BTN_BROWSE) ? RGB(0x0D, 0x1B, 0x2A) : RGB(0x0A, 0x15, 0x20);
+    HBRUSH bgBrush = CreateSolidBrush(bgCol);
+    FillRect(item->hDC, &item->rcItem, bgBrush);
+    DeleteObject(bgBrush);
+
     HGDIOBJ oldBrush = SelectObject(item->hDC, fill);
     HGDIOBJ oldPen = SelectObject(item->hDC, border);
     RoundRect(item->hDC, item->rcItem.left, item->rcItem.top,
@@ -2073,7 +2080,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 MB_YESNO | MB_ICONQUESTION) != IDYES)
                 return 0;
         }
-        AnimateWindow(hWnd, 140, AW_BLEND | AW_HIDE);
         DestroyWindow(hWnd);
         return 0;
 
@@ -2191,7 +2197,8 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     wc.lpfnWndProc   = WndProc;
     wc.hInstance     = hInstance;
     wc.hCursor       = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    HBRUSH hNavyBrush = CreateSolidBrush(RGB(0x0D, 0x1B, 0x2A));
+    wc.hbrBackground = hNavyBrush;
     wc.lpszClassName = L"NirqobaInstallerWnd";
     wc.hIcon         = LoadIconW(hInstance, MAKEINTRESOURCEW(IDI_APPICON));
     wc.hIconSm       = wc.hIcon;
@@ -2212,16 +2219,21 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         winX, winY, WINDOW_W, WINDOW_H,
         nullptr, nullptr, hInstance, nullptr);
 
-    if (!hWnd) return 1;
+    if (!hWnd) {
+        DeleteObject(hNavyBrush);
+        return 1;
+    }
 
+    ShowWindow(hWnd, SW_SHOW);
     UpdateWindow(hWnd);
-    AnimateWindow(hWnd, 180, AW_BLEND | AW_ACTIVATE);
 
     MSG msg = {};
     while (GetMessageW(&msg, nullptr, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+
+    DeleteObject(hNavyBrush);
 
     // Cleanup
     if (g_d2dFactory) { g_d2dFactory->Release(); g_d2dFactory = nullptr; }

@@ -53,7 +53,7 @@ if exist "%ASSETS_DIR%\nirqoba.exe" (
 )
 
 echo [2/5] Compiling and linking uninstaller (uninstall.exe)...
-"%RC_EXE%" /I "%SRC_DIR%" /I "%SDK_INC%\um" /I "%SDK_INC%\shared" /nologo /fo "%OUT_DIR%\uninstall.res" "%SRC_DIR%\uninstall.rc"
+"%RC_EXE%" /I "%SRC_DIR%" /I "%ASSETS_DIR%" /I "%SDK_INC%\um" /I "%SDK_INC%\shared" /nologo /fo "%OUT_DIR%\uninstall.res" "%SRC_DIR%\uninstall.rc"
 if errorlevel 1 (
     echo [ERROR] Uninstaller resource compilation failed.
     exit /b 1

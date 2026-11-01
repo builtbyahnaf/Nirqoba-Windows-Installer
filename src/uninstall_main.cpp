@@ -77,6 +77,10 @@ static ID2D1Factory* g_d2dFactory = nullptr;
 static ID2D1HwndRenderTarget* g_renderTarget = nullptr;
 static IDWriteFactory* g_dwFactory = nullptr;
 static IWICImagingFactory* g_wicFactory = nullptr;
+static ID2D1Bitmap* g_logoBitmap = nullptr;
+
+// Resource ID for the embedded logo PNG
+#define IDR_LOGO_PNG 2
 
 static ID2D1SolidColorBrush* g_brushWhite = nullptr;
 static ID2D1SolidColorBrush* g_brushBg = nullptr;
@@ -149,6 +153,46 @@ static bool RelaunchElevated() {
     sei.nShow        = SW_NORMAL;
     sei.fMask        = SEE_MASK_NOASYNC;
     return ShellExecuteExW(&sei) != FALSE;
+}
+
+// Load the logo PNG embedded as RCDATA into a D2D bitmap via WIC
+static HRESULT LoadLogoFromResource() {
+    if (!g_wicFactory || !g_renderTarget || !g_hInst) return E_FAIL;
+
+    HRSRC hRes = FindResourceW(g_hInst, MAKEINTRESOURCEW(IDR_LOGO_PNG), RT_RCDATA);
+    if (!hRes) return E_FAIL;
+    HGLOBAL hGlobal = LoadResource(g_hInst, hRes);
+    if (!hGlobal) return E_FAIL;
+    void*  pData = LockResource(hGlobal);
+    DWORD  size  = SizeofResource(g_hInst, hRes);
+    if (!pData || !size) return E_FAIL;
+
+    IWICStream* pStream = nullptr;
+    HRESULT hr = g_wicFactory->CreateStream(&pStream);
+    if (SUCCEEDED(hr))
+        hr = pStream->InitializeFromMemory(reinterpret_cast<BYTE*>(pData), size);
+
+    IWICBitmapDecoder*     decoder   = nullptr;
+    IWICBitmapFrameDecode* frame     = nullptr;
+    IWICFormatConverter*   converter = nullptr;
+
+    if (SUCCEEDED(hr))
+        hr = g_wicFactory->CreateDecoderFromStream(pStream, nullptr,
+             WICDecodeMetadataCacheOnLoad, &decoder);
+    if (SUCCEEDED(hr)) hr = decoder->GetFrame(0, &frame);
+    if (SUCCEEDED(hr)) hr = g_wicFactory->CreateFormatConverter(&converter);
+    if (SUCCEEDED(hr)) hr = converter->Initialize(frame,
+             GUID_WICPixelFormat32bppPBGRA,
+             WICBitmapDitherTypeNone, nullptr, 0.f,
+             WICBitmapPaletteTypeMedianCut);
+    if (SUCCEEDED(hr))
+        hr = g_renderTarget->CreateBitmapFromWicBitmap(converter, &g_logoBitmap);
+
+    if (converter) converter->Release();
+    if (frame)     frame->Release();
+    if (decoder)   decoder->Release();
+    if (pStream)   pStream->Release();
+    return hr;
 }
 
 static bool RemoveFromPathSafely(const std::wstring& dirToRemove, bool perUser) {
@@ -302,6 +346,13 @@ static void DrawStyledButton(const DRAWITEMSTRUCT* item) {
 
     HBRUSH fill = CreateSolidBrush(fillColor);
     HPEN border = CreatePen(PS_SOLID, 1, borderColor);
+
+    // Erase button rect with the panel background color first so GDI's
+    // RoundRect does not leave white artifacts in the (square) corner regions.
+    HBRUSH bgBrush = CreateSolidBrush(RGB(0x0A, 0x15, 0x20));
+    FillRect(item->hDC, &item->rcItem, bgBrush);
+    DeleteObject(bgBrush);
+
     HGDIOBJ oldBrush = SelectObject(item->hDC, fill);
     HGDIOBJ oldPen = SelectObject(item->hDC, border);
     RoundRect(item->hDC, item->rcItem.left, item->rcItem.top,
@@ -378,6 +429,9 @@ static HRESULT CreateDeviceResources() {
             col, &g_brushProgressGrad);
         if (col) col->Release();
     }
+    // Load logo bitmap from embedded resource
+    if (SUCCEEDED(hr))
+        LoadLogoFromResource();
     return hr;
 }
 
@@ -399,6 +453,7 @@ static void DiscardDeviceResources() {
     rel((IUnknown**)&g_brushDanger);
     rel((IUnknown**)&g_brushSidebarGrad);
     rel((IUnknown**)&g_brushProgressGrad);
+    if (g_logoBitmap) { g_logoBitmap->Release(); g_logoBitmap = nullptr; }
     if (g_renderTarget) { g_renderTarget->Release(); g_renderTarget = nullptr; }
 }
 
@@ -414,33 +469,48 @@ static void DrawSidebar(ID2D1RenderTarget* rt) {
         borderBrush, 1.f);
     borderBrush->Release();
 
+    // Logo (centered in top portion of sidebar)
+    if (g_logoBitmap) {
+        D2D1_SIZE_F src = g_logoBitmap->GetSize();
+        float box = 80.f;
+        float factor = (src.width > 0.f && src.height > 0.f)
+            ? std::min(box / src.width, box / src.height) : 0.f;
+        float lw = src.width * factor;
+        float lh = src.height * factor;
+        float lcx = SIDEBAR_W / 2.f;
+        float lcy = 75.f;
+        rt->DrawBitmap(g_logoBitmap,
+            RectF(lcx - lw / 2.f, lcy - lh / 2.f, lcx + lw / 2.f, lcy + lh / 2.f),
+            1.f, D2D1_BITMAP_INTERPOLATION_MODE_LINEAR);
+    }
+
     // Brand text
     IDWriteTextFormat* brandFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_LIGHT, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 26.f, L"en-us", &brandFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 22.f, L"en-us", &brandFmt);
     if (brandFmt) {
         brandFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         rt->DrawTextW(L"NIRQOBA", 7, brandFmt,
-            RectF(0, 110.f, (float)SIDEBAR_W, 145.f), g_brushTextPri);
+            RectF(0, 120.f, (float)SIDEBAR_W, 150.f), g_brushTextPri);
         brandFmt->Release();
     }
 
     IDWriteTextFormat* subFmt = nullptr;
     g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
         DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
-        DWRITE_FONT_STRETCH_NORMAL, 13.f, L"en-us", &subFmt);
+        DWRITE_FONT_STRETCH_NORMAL, 11.f, L"en-us", &subFmt);
     if (subFmt) {
         subFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
         rt->DrawTextW(L"Uninstall Maintenance", 21, subFmt,
-            RectF(0, 150.f, (float)SIDEBAR_W, 175.f), g_brushTextMuted);
+            RectF(0, 152.f, (float)SIDEBAR_W, 172.f), g_brushTextMuted);
         subFmt->Release();
     }
 
-    rt->DrawLine(D2D1::Point2F(24.f, 210.f), D2D1::Point2F(SIDEBAR_W - 24.f, 210.f), g_brushSeparator, 1.f);
+    rt->DrawLine(D2D1::Point2F(24.f, 196.f), D2D1::Point2F(SIDEBAR_W - 24.f, 196.f), g_brushSeparator, 1.f);
 
     const wchar_t* steps[] = { L"Confirmation", L"Uninstalling", L"Finished" };
-    float stepY = 240.f;
+    float stepY = 220.f;
     for (int i = 0; i < 3; i++) {
         bool isActive = (i == (int)g_currentPage);
         bool isDone = (i < (int)g_currentPage);
@@ -836,7 +906,6 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 MB_YESNO | MB_ICONQUESTION) != IDYES)
                 return 0;
         }
-        AnimateWindow(hWnd, 140, AW_BLEND | AW_HIDE);
         DestroyWindow(hWnd);
         return 0;
 
@@ -882,13 +951,16 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
     CoInitializeEx(nullptr, COINIT_APARTMENTTHREADED | COINIT_DISABLE_OLE1DDE);
     D2D1CreateFactory(D2D1_FACTORY_TYPE_SINGLE_THREADED, &g_d2dFactory);
     DWriteCreateFactory(DWRITE_FACTORY_TYPE_SHARED, __uuidof(IDWriteFactory), (IUnknown**)&g_dwFactory);
+    CoCreateInstance(CLSID_WICImagingFactory, nullptr, CLSCTX_INPROC_SERVER,
+        IID_PPV_ARGS(&g_wicFactory));
 
     WNDCLASSEXW wc = { sizeof(wc) };
     wc.lpfnWndProc = WndProc;
     wc.hInstance = hInstance;
     wc.lpszClassName = L"NirqobaUninstallerWnd";
     wc.hCursor = LoadCursorW(nullptr, IDC_ARROW);
-    wc.hbrBackground = (HBRUSH)GetStockObject(BLACK_BRUSH);
+    HBRUSH hNavyBrush = CreateSolidBrush(RGB(0x0D, 0x1B, 0x2A));
+    wc.hbrBackground = hNavyBrush;
     RegisterClassExW(&wc);
 
     int sx = (GetSystemMetrics(SM_CXSCREEN) - WINDOW_W) / 2;
@@ -902,16 +974,20 @@ int WINAPI WinMain(HINSTANCE hInstance, HINSTANCE, LPSTR, int nCmdShow) {
         sx, sy, WINDOW_W, WINDOW_H,
         nullptr, nullptr, hInstance, nullptr);
 
-    if (!hWnd) return 1;
+    if (!hWnd) {
+        DeleteObject(hNavyBrush);
+        return 1;
+    }
 
+    ShowWindow(hWnd, SW_SHOW);
     UpdateWindow(hWnd);
-    AnimateWindow(hWnd, 180, AW_BLEND | AW_ACTIVATE);
 
     MSG msg;
     while (GetMessageW(&msg, nullptr, 0, 0)) {
         TranslateMessage(&msg);
         DispatchMessageW(&msg);
     }
+    DeleteObject(hNavyBrush);
     CoUninitialize();
     return (int)msg.wParam;
 }
