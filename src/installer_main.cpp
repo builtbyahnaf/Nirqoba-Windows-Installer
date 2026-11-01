@@ -138,6 +138,8 @@ static ID2D1SolidColorBrush* g_brushSuccess     = nullptr;
 static ID2D1SolidColorBrush* g_brushPanel       = nullptr;
 static ID2D1SolidColorBrush* g_brushSurfaceLight= nullptr;
 static ID2D1SolidColorBrush* g_brushAccentBorder= nullptr;
+static ID2D1SolidColorBrush* g_brushLavender    = nullptr;
+static ID2D1SolidColorBrush* g_brushBlue1       = nullptr;
 
 // Gradient brushes
 static ID2D1LinearGradientBrush* g_brushSidebarGrad  = nullptr;
@@ -165,8 +167,23 @@ static HWND          g_hBtnNext   = nullptr;
 static HWND          g_hBtnBack   = nullptr;
 static HWND          g_hBtnCancel = nullptr;
 static HWND          g_hBtnBrowse = nullptr;
-static HWND          g_hChkDesktop= nullptr;
-static HWND          g_hChkPath   = nullptr;
+static int           g_hoverOptCard = 0; // 0 = none, 1 = PATH card, 2 = Desktop shortcut card
+
+// Fonts and control procs
+static HFONT         g_hLicenseFont = nullptr;
+static HFONT         g_hEditFont    = nullptr;
+static HFONT         g_hUiFont      = nullptr;
+static HFONT         g_hBtnFont     = nullptr;
+static WNDPROC       g_pfnOrigLicenseEditProc = nullptr;
+
+static LRESULT CALLBACK LicenseEditProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
+    if (msg == WM_SETFOCUS) {
+        LRESULT res = CallWindowProcW(g_pfnOrigLicenseEditProc, hWnd, msg, wParam, lParam);
+        HideCaret(hWnd);
+        return res;
+    }
+    return CallWindowProcW(g_pfnOrigLicenseEditProc, hWnd, msg, wParam, lParam);
+}
 
 // Drag state for frameless window
 static bool  g_dragging   = false;
@@ -237,7 +254,7 @@ under which you wish to use, copy, modify, distribute, or sub-license this softw
 --------------------------------------------------------------------------------
 OPTION 1: THE MIT LICENSE
 
-Copyright (c) 2026 [Your Name or Project Team]
+Copyright (c) 2026 Project Nirqoba
 
 Permission is hereby granted, free of charge, to any person obtaining a copy
 of this software and associated documentation files (the "Software"), to deal
@@ -311,6 +328,8 @@ static void CreateBrushes() {
     mk(Color::Panel,        &g_brushPanel);
     mk(Color::SurfaceLight, &g_brushSurfaceLight);
     mk(Color::AccentBorder, &g_brushAccentBorder);
+    mk(Color::Lavender,     &g_brushLavender);
+    mk(Color::Blue1,        &g_brushBlue1);
 
     // Sidebar gradient (top indigo → bottom navy)
     {
@@ -408,6 +427,8 @@ static void ReleaseBrushes() {
     rel((IUnknown**)&g_brushPanel);
     rel((IUnknown**)&g_brushSurfaceLight);
     rel((IUnknown**)&g_brushAccentBorder);
+    rel((IUnknown**)&g_brushLavender);
+    rel((IUnknown**)&g_brushBlue1);
     rel((IUnknown**)&g_brushSidebarGrad);
     rel((IUnknown**)&g_brushProgressGrad);
     rel((IUnknown**)&g_brushTitleGrad);
@@ -792,6 +813,211 @@ static void DrawPageLicense(ID2D1RenderTarget* rt) {
 
 }
 
+static inline void GetOptionCardRect(int index, float& l, float& t, float& r, float& b) {
+    l = SIDEBAR_W + 40.f;
+    r = (float)WINDOW_W - 40.f;
+    float editB = (TITLEBAR_H + 32.f) + 120.f + 42.f + 52.f; // 298.f
+    float optT = editB + 44.f; // 342.f
+    float card1T = optT + 46.f; // 388.f
+    float cardH = 88.f;
+    if (index == 1) {
+        t = card1T;
+        b = card1T + cardH;
+    } else {
+        t = card1T + cardH + 16.f; // 492.f
+        b = t + cardH; // 580.f
+    }
+}
+
+static void DrawOptionCard(
+    ID2D1RenderTarget* rt,
+    int cardIndex,
+    bool isChecked,
+    bool isHovered,
+    const wchar_t* title,
+    const wchar_t* subtitle,
+    const wchar_t* badgeText,
+    int iconType)
+{
+    float l, t, r, b;
+    GetOptionCardRect(cardIndex, l, t, r, b);
+    float cy = (t + b) / 2.f;
+
+    // 1. Card Container Background & Border
+    ID2D1SolidColorBrush* bgBrush = nullptr;
+    ID2D1SolidColorBrush* borderBrush = nullptr;
+
+    if (isChecked) {
+        bgBrush = isHovered ? g_brushSurfaceLight : g_brushSurface;
+        borderBrush = isHovered ? g_brushAccentBorder : g_brushAccent;
+    } else {
+        rt->CreateSolidColorBrush(D2D1::ColorF(isHovered ? 0x15273E : 0x0E1B2A), &bgBrush);
+        rt->CreateSolidColorBrush(D2D1::ColorF(isHovered ? 0x3B5478 : 0x1E314B), &borderBrush);
+    }
+
+    rt->FillRoundedRectangle(RoundedRect(l, t, r, b, 10.f), bgBrush);
+    rt->DrawRoundedRectangle(RoundedRect(l, t, r, b, 10.f), borderBrush, isChecked ? 1.5f : 1.f);
+
+    if (!isChecked) {
+        if (bgBrush) bgBrush->Release();
+        if (borderBrush) borderBrush->Release();
+    }
+
+    // Left Active Pill Indicator
+    if (isChecked) {
+        rt->FillRoundedRectangle(RoundedRect(l, t + 14.f, l + 4.f, b - 14.f, 2.f), g_brushAccent);
+    }
+
+    // 2. Icon Tile (Left side)
+    float iconBoxL = l + 22.f;
+    float iconBoxT = cy - 22.f;
+    float iconBoxR = iconBoxL + 44.f;
+    float iconBoxB = cy + 22.f;
+    float iconCx = (iconBoxL + iconBoxR) / 2.f;
+
+    ID2D1SolidColorBrush* iconBg = nullptr;
+    ID2D1SolidColorBrush* iconBorder = nullptr;
+    if (isChecked) {
+        rt->CreateSolidColorBrush(D2D1::ColorF(0x232052, 0.95f), &iconBg);
+        rt->CreateSolidColorBrush(D2D1::ColorF(0x5A52B4, 0.8f), &iconBorder);
+    } else {
+        rt->CreateSolidColorBrush(D2D1::ColorF(0x132035, 0.9f), &iconBg);
+        rt->CreateSolidColorBrush(D2D1::ColorF(0x283850, 0.8f), &iconBorder);
+    }
+
+    rt->FillRoundedRectangle(RoundedRect(iconBoxL, iconBoxT, iconBoxR, iconBoxB, 8.f), iconBg);
+    rt->DrawRoundedRectangle(RoundedRect(iconBoxL, iconBoxT, iconBoxR, iconBoxB, 8.f), iconBorder, 1.f);
+    iconBg->Release();
+    iconBorder->Release();
+
+    // Draw Vector Icon inside Tile
+    if (iconType == 0) {
+        // PATH / Terminal: "> _"
+        ID2D1SolidColorBrush* promptBrush = isChecked ? g_brushLavender : g_brushBlue1;
+        ID2D1SolidColorBrush* cursorBrush = isChecked ? g_brushWhite : g_brushTextSec;
+
+        rt->DrawLine(D2D1::Point2F(iconCx - 7.f, cy - 6.f), D2D1::Point2F(iconCx - 1.f, cy), promptBrush, 2.2f);
+        rt->DrawLine(D2D1::Point2F(iconCx - 1.f, cy), D2D1::Point2F(iconCx - 7.f, cy + 6.f), promptBrush, 2.2f);
+        rt->DrawLine(D2D1::Point2F(iconCx + 2.f, cy + 6.f), D2D1::Point2F(iconCx + 9.f, cy + 6.f), cursorBrush, 2.2f);
+    } else {
+        // Desktop Shortcut: Display with stand and Nirqoba diamond
+        ID2D1SolidColorBrush* frameBrush = isChecked ? g_brushLavender : g_brushBlue1;
+        ID2D1SolidColorBrush* baseBrush = isChecked ? g_brushAccent : g_brushTextSec;
+
+        rt->DrawRoundedRectangle(RoundedRect(iconCx - 11.f, cy - 9.f, iconCx + 11.f, cy + 5.f, 2.5f), frameBrush, 1.8f);
+        rt->DrawLine(D2D1::Point2F(iconCx, cy + 5.f), D2D1::Point2F(iconCx, cy + 9.f), baseBrush, 1.8f);
+        rt->DrawLine(D2D1::Point2F(iconCx - 6.f, cy + 9.f), D2D1::Point2F(iconCx + 6.f, cy + 9.f), baseBrush, 1.8f);
+        rt->FillEllipse(Ellipse(iconCx, cy - 2.f, 2.5f, 2.5f), isChecked ? g_brushWhite : g_brushAccent);
+    }
+
+    // 3. Typography & Badge
+    float textL = iconBoxR + 18.f;
+    float titleY = cy - 22.f;
+
+    IDWriteTextFormat* titleFmt = nullptr;
+    g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
+        DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL, 17.f, L"en-us", &titleFmt);
+    if (titleFmt) {
+        rt->DrawTextW(title, (UINT32)wcslen(title), titleFmt,
+            RectF(textL, titleY, r - 220.f, titleY + 24.f),
+            isChecked ? g_brushTextPri : g_brushTextSec);
+        titleFmt->Release();
+    }
+
+    if (badgeText) {
+        float badgeL = textL + 236.f;
+        float badgeT = titleY + 1.f;
+        float badgeR = badgeL + 112.f;
+        float badgeB = badgeT + 21.f;
+
+        ID2D1SolidColorBrush* badgeBg = nullptr;
+        ID2D1SolidColorBrush* badgeBorder = nullptr;
+        ID2D1SolidColorBrush* badgeTextBrush = nullptr;
+        rt->CreateSolidColorBrush(D2D1::ColorF(0x221F4C), &badgeBg);
+        rt->CreateSolidColorBrush(D2D1::ColorF(0x5650A4, 0.9f), &badgeBorder);
+        rt->CreateSolidColorBrush(D2D1::ColorF(0xC4B4FC), &badgeTextBrush);
+
+        rt->FillRoundedRectangle(RoundedRect(badgeL, badgeT, badgeR, badgeB, 4.f), badgeBg);
+        rt->DrawRoundedRectangle(RoundedRect(badgeL, badgeT, badgeR, badgeB, 4.f), badgeBorder, 1.f);
+
+        IDWriteTextFormat* badgeFmt = nullptr;
+        g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
+            DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
+            DWRITE_FONT_STRETCH_NORMAL, 10.f, L"en-us", &badgeFmt);
+        if (badgeFmt) {
+            badgeFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_CENTER);
+            badgeFmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+            rt->DrawTextW(badgeText, (UINT32)wcslen(badgeText), badgeFmt,
+                RectF(badgeL, badgeT, badgeR, badgeB), badgeTextBrush);
+            badgeFmt->Release();
+        }
+
+        badgeBg->Release();
+        badgeBorder->Release();
+        badgeTextBrush->Release();
+    }
+
+    float subY = cy + 4.f;
+    IDWriteTextFormat* subFmt = nullptr;
+    g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
+        DWRITE_FONT_WEIGHT_NORMAL, DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL, 13.5f, L"en-us", &subFmt);
+    if (subFmt) {
+        rt->DrawTextW(subtitle, (UINT32)wcslen(subtitle), subFmt,
+            RectF(textL, subY, r - 220.f, subY + 22.f),
+            g_brushTextMuted);
+        subFmt->Release();
+    }
+
+    // 4. Modern Toggle Switch (Right side)
+    float switchR = r - 32.f;
+    float switchL = switchR - 52.f;
+    float switchT = cy - 14.f;
+    float switchB = cy + 14.f;
+
+    ID2D1SolidColorBrush* trackFill = nullptr;
+    ID2D1SolidColorBrush* trackBorder = nullptr;
+    ID2D1SolidColorBrush* thumbFill = nullptr;
+
+    if (isChecked) {
+        trackFill = g_brushAccent;
+        trackBorder = g_brushLavender;
+        thumbFill = g_brushWhite;
+    } else {
+        rt->CreateSolidColorBrush(D2D1::ColorF(0x132032), &trackFill);
+        rt->CreateSolidColorBrush(D2D1::ColorF(0x344864), &trackBorder);
+        rt->CreateSolidColorBrush(D2D1::ColorF(0x6E84A3), &thumbFill);
+    }
+
+    rt->FillRoundedRectangle(RoundedRect(switchL, switchT, switchR, switchB, 14.f), trackFill);
+    rt->DrawRoundedRectangle(RoundedRect(switchL, switchT, switchR, switchB, 14.f), trackBorder, 1.f);
+
+    float thumbCx = isChecked ? (switchR - 14.f) : (switchL + 14.f);
+    rt->FillEllipse(Ellipse(thumbCx, cy, 10.f, 10.f), thumbFill);
+
+    if (!isChecked) {
+        trackFill->Release();
+        trackBorder->Release();
+        thumbFill->Release();
+    }
+
+    // "Enabled" / "Disabled" text
+    IDWriteTextFormat* stateFmt = nullptr;
+    g_dwFactory->CreateTextFormat(L"Segoe UI", nullptr,
+        DWRITE_FONT_WEIGHT_SEMI_BOLD, DWRITE_FONT_STYLE_NORMAL,
+        DWRITE_FONT_STRETCH_NORMAL, 13.f, L"en-us", &stateFmt);
+    if (stateFmt) {
+        stateFmt->SetTextAlignment(DWRITE_TEXT_ALIGNMENT_TRAILING);
+        stateFmt->SetParagraphAlignment(DWRITE_PARAGRAPH_ALIGNMENT_CENTER);
+        const wchar_t* stateStr = isChecked ? L"Enabled" : L"Disabled";
+        rt->DrawTextW(stateStr, (UINT32)wcslen(stateStr), stateFmt,
+            RectF(switchL - 90.f, cy - 12.f, switchL - 12.f, cy + 12.f),
+            isChecked ? g_brushAccent : g_brushTextMuted);
+        stateFmt->Release();
+    }
+}
+
 static void DrawPageOptions(ID2D1RenderTarget* rt) {
     float cL = SIDEBAR_W + 40.f;
     float cR = (float)WINDOW_W - 40.f;
@@ -851,6 +1077,16 @@ static void DrawPageOptions(ID2D1RenderTarget* rt) {
         optSectionFmt->Release();
     }
 
+    // Modern Option Cards
+    DrawOptionCard(rt, 1, g_addToPath, (g_hoverOptCard == 1),
+        L"Add Nirqoba to system PATH",
+        L"Enables running 'nirqoba' directly from Command Prompt, PowerShell, or Windows Terminal",
+        L"RECOMMENDED", 0);
+
+    DrawOptionCard(rt, 2, g_addDesktopShortcut, (g_hoverOptCard == 2),
+        L"Create Desktop Shortcut",
+        L"Place a Nirqoba shortcut on your desktop for quick terminal and toolchain access",
+        nullptr, 1);
 }
 
 static void DrawPageInstalling(ID2D1RenderTarget* rt) {
@@ -1113,17 +1349,20 @@ static void OnRender() {
 // Native control management (position/show/hide based on page)
 // ---------------------------------------------------------------------------
 static void UpdateNativeControls() {
-    bool showEditPath  = (g_currentPage == PAGE_OPTIONS);
-    bool showLicense   = (g_currentPage == PAGE_LICENSE);
-    bool showBrowse    = (g_currentPage == PAGE_OPTIONS);
-    bool showChkDsk    = (g_currentPage == PAGE_OPTIONS);
-    bool showChkPath   = (g_currentPage == PAGE_OPTIONS);
+    bool inTransition  = (g_transitionProgress < 1.0f);
+    bool showEditPath  = !inTransition && (g_currentPage == PAGE_OPTIONS);
+    bool showLicense   = !inTransition && (g_currentPage == PAGE_LICENSE);
+    bool showBrowse    = !inTransition && (g_currentPage == PAGE_OPTIONS);
 
-    if (g_hEditPath)   ShowWindow(g_hEditPath,   showEditPath ? SW_SHOW : SW_HIDE);
-    if (g_hLicenseText) ShowWindow(g_hLicenseText, showLicense ? SW_SHOW : SW_HIDE);
-    if (g_hBtnBrowse)  ShowWindow(g_hBtnBrowse,  showBrowse   ? SW_SHOW : SW_HIDE);
-    if (g_hChkDesktop) ShowWindow(g_hChkDesktop, showChkDsk   ? SW_SHOW : SW_HIDE);
-    if (g_hChkPath)    ShowWindow(g_hChkPath,    showChkPath  ? SW_SHOW : SW_HIDE);
+    if (g_hEditPath)    ShowWindow(g_hEditPath,   showEditPath ? SW_SHOW : SW_HIDE);
+    if (g_hLicenseText) {
+        ShowWindow(g_hLicenseText, showLicense ? SW_SHOW : SW_HIDE);
+        if (showLicense) {
+            SendMessageW(g_hLicenseText, EM_SETSEL, (WPARAM)-1, 0);
+            HideCaret(g_hLicenseText);
+        }
+    }
+    if (g_hBtnBrowse)   ShowWindow(g_hBtnBrowse,  showBrowse   ? SW_SHOW : SW_HIDE);
 
     // Update Next button text
     if (g_hBtnNext) {
@@ -1202,18 +1441,27 @@ static void CreateNativeControls(HWND hWnd) {
     const float licenseTop = cT + 108.f + 12.f;
     const float licenseBottom = WINDOW_H - 100.f - 12.f;
     g_hLicenseText = CreateWindowExW(
-        0, L"EDIT", g_licenseText.c_str(),
-        WS_CHILD | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | ES_NOHIDESEL | WS_TABSTOP,
+        0, L"EDIT", L"",
+        WS_CHILD | WS_VSCROLL | ES_MULTILINE | ES_AUTOVSCROLL | ES_READONLY | WS_TABSTOP,
         (int)cL + 14, (int)licenseTop, (int)(cR - cL - 28),
         (int)(licenseBottom - licenseTop),
         hWnd, nullptr, g_hInst, nullptr);
     if (g_hLicenseText) {
-        HFONT licenseFont = CreateFontW(18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-        SendMessageW(g_hLicenseText, WM_SETFONT, (WPARAM)licenseFont, TRUE);
+        SetWindowTheme(g_hLicenseText, L"DarkMode_Explorer", nullptr);
+        g_pfnOrigLicenseEditProc = (WNDPROC)SetWindowLongPtrW(
+            g_hLicenseText, GWLP_WNDPROC, (LONG_PTR)LicenseEditProc);
+
+        if (!g_hLicenseFont) {
+            g_hLicenseFont = CreateFontW(
+                -16, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_DONTCARE, L"Segoe UI");
+        }
+        SendMessageW(g_hLicenseText, WM_SETFONT, (WPARAM)g_hLicenseFont, TRUE);
         SendMessageW(g_hLicenseText, EM_SETMARGINS, EC_LEFTMARGIN | EC_RIGHTMARGIN,
-            MAKELPARAM(12, 12));
+            MAKELPARAM(16, 16));
+        SetWindowTextW(g_hLicenseText, g_licenseText.c_str());
+        SendMessageW(g_hLicenseText, EM_SETSEL, (WPARAM)-1, 0);
     }
 
     // Options page: path edit box
@@ -1224,14 +1472,17 @@ static void CreateNativeControls(HWND hWnd) {
         0, L"EDIT", g_installPath.c_str(),
         WS_CHILD | WS_VISIBLE | ES_AUTOHSCROLL,
         (int)cL + 1, (int)editT + 1, (int)(editR - cL - 2), 52,
-        hWnd, (HMENU)ID_EDIT_PATH, g_hInst, nullptr);
+        hWnd, (HMENU)(INT_PTR)ID_EDIT_PATH, g_hInst, nullptr);
 
     // Style the edit box to match dark theme
     if (g_hEditPath) {
-        HFONT hFont = CreateFontW(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-        SendMessageW(g_hEditPath, WM_SETFONT, (WPARAM)hFont, TRUE);
+        SetWindowTheme(g_hEditPath, L"DarkMode_Explorer", nullptr);
+        if (!g_hEditFont) {
+            g_hEditFont = CreateFontW(20, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+                DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+                CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+        }
+        SendMessageW(g_hEditPath, WM_SETFONT, (WPARAM)g_hEditFont, TRUE);
         // Colors handled by WM_CTLCOLOREDIT
     }
 
@@ -1240,31 +1491,15 @@ static void CreateNativeControls(HWND hWnd) {
         0, L"BUTTON", L"Browse",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         (int)editR + 12, (int)editT, 132, 54,
-        hWnd, (HMENU)ID_BTN_BROWSE, g_hInst, nullptr);
-
-    // Checkboxes
-    float optT = editT + 52.f + 44.f;
-    g_hChkDesktop = CreateWindowExW(
-        0, L"BUTTON", L"Create desktop shortcut",
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        (int)cL, (int)optT, (int)(cR - cL), 36,
-        hWnd, (HMENU)ID_CHK_DESKTOP, g_hInst, nullptr);
-    SendMessageW(g_hChkDesktop, BM_SETCHECK, BST_CHECKED, 0);
-
-    g_hChkPath = CreateWindowExW(
-        0, L"BUTTON", L"Add Nirqoba to system PATH",
-        WS_CHILD | WS_VISIBLE | BS_AUTOCHECKBOX,
-        (int)cL, (int)optT + 44.f, (int)(cR - cL), 36,
-        hWnd, (HMENU)ID_CHK_PATH, g_hInst, nullptr);
-    SendMessageW(g_hChkPath, BM_SETCHECK, BST_CHECKED, 0);
+        hWnd, (HMENU)(INT_PTR)ID_BTN_BROWSE, g_hInst, nullptr);
 
     // Style native controls with Segoe UI
-    HFONT hFont = CreateFontW(18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
-    if (g_hBtnBrowse)  SendMessageW(g_hBtnBrowse,  WM_SETFONT, (WPARAM)hFont, TRUE);
-    if (g_hChkDesktop) SendMessageW(g_hChkDesktop, WM_SETFONT, (WPARAM)hFont, TRUE);
-    if (g_hChkPath)    SendMessageW(g_hChkPath,    WM_SETFONT, (WPARAM)hFont, TRUE);
+    if (!g_hUiFont) {
+        g_hUiFont = CreateFontW(18, 0, 0, 0, FW_NORMAL, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+    }
+    if (g_hBtnBrowse)  SendMessageW(g_hBtnBrowse,  WM_SETFONT, (WPARAM)g_hUiFont, TRUE);
 
     // Navigation buttons (always visible in button bar)
     float btnBarT = WINDOW_H - 84.f;
@@ -1272,34 +1507,36 @@ static void CreateNativeControls(HWND hWnd) {
     float btnW    = 144.f;
     float btnMarR = WINDOW_W - 32.f;
 
-    HFONT hBtnFont = CreateFontW(18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
-        DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
-        CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+    if (!g_hBtnFont) {
+        g_hBtnFont = CreateFontW(18, 0, 0, 0, FW_SEMIBOLD, FALSE, FALSE, FALSE,
+            DEFAULT_CHARSET, OUT_DEFAULT_PRECIS, CLIP_DEFAULT_PRECIS,
+            CLEARTYPE_QUALITY, DEFAULT_PITCH | FF_SWISS, L"Segoe UI");
+    }
 
     // Cancel button (leftmost in button bar)
     g_hBtnCancel = CreateWindowExW(
         0, L"BUTTON", L"Cancel",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         SIDEBAR_W + 32, (int)btnBarT + 15, 112, (int)btnH,
-        hWnd, (HMENU)ID_BTN_CANCEL, g_hInst, nullptr);
+        hWnd, (HMENU)(INT_PTR)ID_BTN_CANCEL, g_hInst, nullptr);
 
     // Back button
     g_hBtnBack = CreateWindowExW(
         0, L"BUTTON", L"Back",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         (int)btnMarR - 2 * (int)btnW - 16, (int)btnBarT + 15, (int)btnW, (int)btnH,
-        hWnd, (HMENU)ID_BTN_BACK, g_hInst, nullptr);
+        hWnd, (HMENU)(INT_PTR)ID_BTN_BACK, g_hInst, nullptr);
 
     // Next button (primary)
     g_hBtnNext = CreateWindowExW(
         0, L"BUTTON", L"Next",
         WS_CHILD | WS_VISIBLE | BS_OWNERDRAW,
         (int)btnMarR - (int)btnW, (int)btnBarT + 15, (int)btnW, (int)btnH,
-        hWnd, (HMENU)ID_BTN_NEXT, g_hInst, nullptr);
+        hWnd, (HMENU)(INT_PTR)ID_BTN_NEXT, g_hInst, nullptr);
 
-    if (g_hBtnNext)   SendMessageW(g_hBtnNext,   WM_SETFONT, (WPARAM)hBtnFont, TRUE);
-    if (g_hBtnBack)   SendMessageW(g_hBtnBack,   WM_SETFONT, (WPARAM)hBtnFont, TRUE);
-    if (g_hBtnCancel) SendMessageW(g_hBtnCancel, WM_SETFONT, (WPARAM)hBtnFont, TRUE);
+    if (g_hBtnNext)   SendMessageW(g_hBtnNext,   WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
+    if (g_hBtnBack)   SendMessageW(g_hBtnBack,   WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
+    if (g_hBtnCancel) SendMessageW(g_hBtnCancel, WM_SETFONT, (WPARAM)g_hBtnFont, TRUE);
 
     UpdateNativeControls();
 }
@@ -1387,9 +1624,14 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
     case WM_TIMER:
         if (wParam == ID_TIMER_TRANSITION) {
             g_transitionProgress = std::min(1.f, g_transitionProgress + 0.10f);
-            if (g_transitionProgress >= 1.f)
+            if (g_transitionProgress >= 1.f) {
                 KillTimer(hWnd, ID_TIMER_TRANSITION);
-            InvalidateRect(hWnd, nullptr, FALSE);
+                UpdateNativeControls();
+                RedrawWindow(hWnd, nullptr, nullptr,
+                    RDW_INVALIDATE | RDW_ALLCHILDREN | RDW_UPDATENOW);
+            } else {
+                InvalidateRect(hWnd, nullptr, FALSE);
+            }
         } else if (wParam == 1) {
             g_animT += 0.016f;
             if (g_currentPage == PAGE_INSTALLING) {
@@ -1451,8 +1693,25 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         SetBkColor(hdc, RGB(0x11, 0x24, 0x3A));
         return (LRESULT)g_hEditBrush;
     }
-    case WM_CTLCOLORBTN:
     case WM_CTLCOLORSTATIC:
+    {
+        HDC hdc = (HDC)wParam;
+        HWND hCtrl = (HWND)lParam;
+        // ES_READONLY edit controls (like the license textbox) are routed here
+        // instead of WM_CTLCOLOREDIT. Give them the same opaque dark surface look.
+        if (hCtrl == g_hLicenseText) {
+            SetTextColor(hdc, RGB(0xF0, 0xF4, 0xFF));
+            SetBkColor(hdc, RGB(0x11, 0x24, 0x3A));
+            SetBkMode(hdc, OPAQUE);
+            return (LRESULT)g_hEditBrush;
+        }
+        // Checkboxes, labels, etc. – transparent over the dark background.
+        SetTextColor(hdc, RGB(0xA0, 0xB8, 0xD8));
+        SetBkColor(hdc, RGB(0x0D, 0x1B, 0x2A));
+        SetBkMode(hdc, TRANSPARENT);
+        return (LRESULT)g_hDarkBrush;
+    }
+    case WM_CTLCOLORBTN:
     {
         HDC hdc = (HDC)wParam;
         SetTextColor(hdc, RGB(0xA0, 0xB8, 0xD8));
@@ -1513,6 +1772,67 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
                 return 0;
             }
         }
+
+        if (g_currentPage == PAGE_OPTIONS) {
+            float l1, t1, r1, b1, l2, t2, r2, b2;
+            GetOptionCardRect(1, l1, t1, r1, b1);
+            GetOptionCardRect(2, l2, t2, r2, b2);
+
+            if (pt.x >= l1 && pt.x <= r1 && pt.y >= t1 && pt.y <= b1) {
+                g_addToPath = !g_addToPath;
+                InvalidateRect(hWnd, nullptr, FALSE);
+                return 0;
+            }
+            if (pt.x >= l2 && pt.x <= r2 && pt.y >= t2 && pt.y <= b2) {
+                g_addDesktopShortcut = !g_addDesktopShortcut;
+                InvalidateRect(hWnd, nullptr, FALSE);
+                return 0;
+            }
+        }
+        break;
+    }
+
+    case WM_MOUSEMOVE:
+    {
+        if (g_currentPage == PAGE_OPTIONS) {
+            POINT pt = { GET_X_LPARAM(lParam), GET_Y_LPARAM(lParam) };
+            float l1, t1, r1, b1, l2, t2, r2, b2;
+            GetOptionCardRect(1, l1, t1, r1, b1);
+            GetOptionCardRect(2, l2, t2, r2, b2);
+
+            int newHover = 0;
+            if (pt.x >= l1 && pt.x <= r1 && pt.y >= t1 && pt.y <= b1) {
+                newHover = 1;
+            } else if (pt.x >= l2 && pt.x <= r2 && pt.y >= t2 && pt.y <= b2) {
+                newHover = 2;
+            }
+
+            if (newHover != g_hoverOptCard) {
+                g_hoverOptCard = newHover;
+                InvalidateRect(hWnd, nullptr, FALSE);
+            }
+
+            TRACKMOUSEEVENT tme = { sizeof(tme), TME_LEAVE, hWnd, 0 };
+            TrackMouseEvent(&tme);
+        }
+        break;
+    }
+
+    case WM_MOUSELEAVE:
+    {
+        if (g_hoverOptCard != 0) {
+            g_hoverOptCard = 0;
+            InvalidateRect(hWnd, nullptr, FALSE);
+        }
+        break;
+    }
+
+    case WM_SETCURSOR:
+    {
+        if (LOWORD(lParam) == HTCLIENT && g_currentPage == PAGE_OPTIONS && g_hoverOptCard != 0) {
+            SetCursor(LoadCursorW(nullptr, IDC_HAND));
+            return TRUE;
+        }
         break;
     }
 
@@ -1566,6 +1886,10 @@ LRESULT CALLBACK WndProc(HWND hWnd, UINT msg, WPARAM wParam, LPARAM lParam) {
         if (g_hDarkBrush) { DeleteObject(g_hDarkBrush); g_hDarkBrush = nullptr; }
         if (g_hSurfBrush) { DeleteObject(g_hSurfBrush); g_hSurfBrush = nullptr; }
         if (g_hEditBrush) { DeleteObject(g_hEditBrush); g_hEditBrush = nullptr; }
+        if (g_hLicenseFont) { DeleteObject(g_hLicenseFont); g_hLicenseFont = nullptr; }
+        if (g_hEditFont)    { DeleteObject(g_hEditFont);    g_hEditFont = nullptr; }
+        if (g_hUiFont)      { DeleteObject(g_hUiFont);      g_hUiFont = nullptr; }
+        if (g_hBtnFont)     { DeleteObject(g_hBtnFont);     g_hBtnFont = nullptr; }
         PostQuitMessage(0);
         return 0;
     }
